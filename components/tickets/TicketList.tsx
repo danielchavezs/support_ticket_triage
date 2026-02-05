@@ -1,11 +1,14 @@
 import TicketDetails from '@/components/tickets/TicketDetails';
 import type { Ticket } from '@/components/tickets/types';
 
-export default function TicketList(props: { tickets: Ticket[] }) {
+export default function TicketList(props: {
+  tickets: Ticket[];
+  onTicketUpdated?: (updatedTicket: Ticket) => void;
+}) {
   return (
     <div className="flex flex-col gap-3">
       {props.tickets.map((ticket) => (
-        <TicketDetails key={ticket.id} ticket={ticket} />
+        <TicketDetails key={ticket.id} ticket={ticket} onTicketUpdated={props.onTicketUpdated} />
       ))}
     </div>
   );

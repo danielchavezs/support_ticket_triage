@@ -19,3 +19,13 @@ export async function createTicket(payload: NewTicketPayload): Promise<Ticket> {
   return json.ticket;
 }
 
+export async function retryTicketTriage(ticketId: string): Promise<Ticket> {
+  const res = await fetch(`/api/tickets/${ticketId}/retry-triage`, {
+    method: 'POST',
+  });
+  const json = (await res.json()) as { ticket?: Ticket; error?: ApiError };
+  if (!res.ok) throw new Error(json.error?.message ?? 'Failed to retry triage.');
+  if (!json.ticket) throw new Error('Server returned no ticket.');
+  return json.ticket;
+}
+

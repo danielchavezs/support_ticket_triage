@@ -23,11 +23,48 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
       return (data ?? []) as TicketRow[];
     },
 
+    async getById(id: string): Promise<TicketRow | null> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') return null; // Not found
+        throw error;
+      }
+      return data as TicketRow;
+    },
+
     async create(input: NewTicketRow): Promise<TicketRow> {
       const supabase = await getSupabaseClient();
       const { data, error } = await supabase
         .from('tickets')
         .insert(input)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    async updateTriage(
+      id: string,
+      update: {
+        priority: TicketPriority;
+        category: TicketCategory;
+        suggested_response: string;
+        triage_status: TicketTriageStatus;
+        triage_error: string | null;
+      },
+    ): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .update(update)
+        .eq('id', id)
         .select('*')
         .single();
 

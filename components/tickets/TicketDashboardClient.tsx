@@ -31,7 +31,7 @@ export default function TicketDashboardClient() {
 
     void loadTickets(true);
 
-    // Poll every 30 seconds
+    // Poll every 15 seconds
     const intervalId = window.setInterval(() => {
       void loadTickets();
     }, 15000);
@@ -47,6 +47,10 @@ export default function TicketDashboardClient() {
     const failed = tickets.filter((t) => t.triageStatus === 'failed').length;
     return { total, failed };
   }, [tickets]);
+
+  function handleTicketUpdated(updatedTicket: Ticket) {
+    setTickets((prev) => prev.map((t) => (t.id === updatedTicket.id ? updatedTicket : t)));
+  }
 
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
@@ -81,7 +85,9 @@ export default function TicketDashboardClient() {
             No tickets yet.
           </div>
         ) : null}
-        {!loading && !error && tickets.length ? <TicketList tickets={tickets} /> : null}
+        {!loading && !error && tickets.length ? (
+          <TicketList tickets={tickets} onTicketUpdated={handleTicketUpdated} />
+        ) : null}
       </div>
     </section>
   );

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
 import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/sources/llm/ticketTriage';
 import { generateObject } from 'ai';
+import type { GenerateObjectResult } from 'ai';
 
 // Mock the AI SDK
 vi.mock('ai', () => ({
@@ -29,7 +30,11 @@ describe('ticketTriage sources', () => {
 
         generateObjectMock.mockResolvedValue({
             object: mockClassification,
-        });
+            finishReason: 'stop',
+            usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+            warnings: undefined,
+            rawResponse: { headers: {} },
+        } as unknown as GenerateObjectResult<typeof mockClassification>);
 
         const result = await classifyTicketWithLlm({
             subject: 'Server down',
@@ -45,7 +50,11 @@ describe('ticketTriage sources', () => {
 
         generateObjectMock.mockResolvedValue({
             object: mockReply,
-        });
+            finishReason: 'stop',
+            usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+            warnings: undefined,
+            rawResponse: { headers: {} },
+        } as unknown as GenerateObjectResult<typeof mockReply>);
 
         const result = await draftCustomerReplyWithLlm({
             priority: 'High',
