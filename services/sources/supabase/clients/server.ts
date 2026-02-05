@@ -7,10 +7,10 @@ export const createServerClient = async (): Promise<SupabaseClient> => {
 	const cookieStore = await cookies();
 
   const url = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY;
+  const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url) throw new Error('Missing env var: SUPABASE_URL');
-  if (!anonKey) throw new Error('Missing env var: SUPABASE_ANON_KEY');
+  if (!anonKey) throw new Error('Missing env var: SUPABASE_ANON_KEY or NEXT_PUBLIC_SUPABASE_ANON_KEY');
 
 	return supabaseClient(
 		url,
