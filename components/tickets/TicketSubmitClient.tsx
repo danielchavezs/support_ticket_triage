@@ -94,15 +94,15 @@ export default function TicketSubmitClient() {
         <button
           type="submit"
           disabled={submitting}
-          className="mt-2 inline-flex items-center justify-center gap-2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="group relative mt-2 inline-flex h-10 items-center justify-center overflow-hidden rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-all duration-200 hover:bg-zinc-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70"
         >
           {submitting ? (
-            <>
-              <Loader size="sm" className="border-zinc-500 border-t-white" />
+            <div className="flex items-center gap-2.5 animate-in fade-in zoom-in-95 duration-200">
+              <Loader size="sm" />
               <span>Submitting… (running triage)</span>
-            </>
+            </div>
           ) : (
-            'Submit ticket'
+            <span className="animate-in fade-in slide-in-from-bottom-2 duration-300">Submit ticket</span>
           )}
         </button>
 
