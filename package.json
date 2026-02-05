@@ -6,13 +6,21 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "gen-types": "supabase gen types typescript --project-id \"byfqtbzdxpoxfjtwojbz\" --schema public > assets/databaseTypes.ts",
+    "test": "vitest --run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@ai-sdk/google": "3.0.21",
+    "@supabase/ssr": "0.8.0",
+    "@supabase/supabase-js": "2.95.1",
+    "ai": "6.0.72",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "vitest": "4.0.18",
+    "zod": "4.1.11"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4",

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Next.js generates typed-route validation files that are not meant to be linted.
+    "types/**",
   ]),
 ]);
 
