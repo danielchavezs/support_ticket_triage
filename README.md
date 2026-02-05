@@ -28,7 +28,12 @@ Full-stack Next.js app where a customer submits a support ticket, the backend au
 - **Feature layer**: `services/features/**` business logic (triage pipeline)
 - **Sources layer**: `services/sources/**` integrations (Supabase, LLM provider)
 
-See `AGENTS.md` for rules and conventions, and `docs/GENERAL_DEV_PLAN.md` for the design doc and implementation notes.
+See `AGENTS.md` for rules and conventions.
+
+## Routes
+
+- Submit ticket: `/`
+- Dashboard: `/dashboard`
 
 ## Local setup
 
@@ -44,21 +49,39 @@ Create `.env.local` (recommended) or `.env` with:
 
 ```bash
 # LLM
+# Recommended
+GOOGLE_GENERATIVE_AI_API_KEY=...
+# Or (legacy naming used by some setups)
 GOOGLE_API_KEY=...
 
-# Supabase
+# Optional (defaults to gemini-2.5-flash-lite)
+AI_MODEL=gemini-2.5-flash-lite
+
+# Supabase (server / API routes)
 SUPABASE_URL=...
+# Either one is enough (both are the *anon* key):
+SUPABASE_ANON_KEY=...
+# or
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+
+# Supabase (browser) — only needed if/when client components call Supabase directly
+NEXT_PUBLIC_SUPABASE_URL=...
+
+# Optional (server-only; reserved for admin workflows / future RLS setup)
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
 Notes:
 
 - `SUPABASE_SERVICE_ROLE_KEY` is **server-only**. Never expose it to the browser.
-- `SUPABASE_CONNECTION_STRING` is optional (useful for scripts/migrations), but should also remain server-only.
+- In Next.js, env vars prefixed with `NEXT_PUBLIC_` are safe to expose to the browser. Server-only env vars should not use that prefix.
 
 ### 3) Supabase schema
 
-Create the required tables in your Supabase project (see `docs/GENERAL_DEV_PLAN.md` for the initial SQL).
+Apply the initial schema in your Supabase project:
+
+- Open Supabase → SQL editor
+- Run `migrations/2026-02-05_create_tickets.sql`
 
 ### 4) Run the app
 
@@ -72,6 +95,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 - Dev server: `pnpm dev`
 - Lint: `pnpm lint`
+- Tests: `pnpm test`
 - Build: `pnpm build`
 - Start: `pnpm start`
 
