@@ -53,6 +53,7 @@ When sources disagree, this is the order:
 - `assets/databaseTypes.ts` : Supabase-generated TS types.
 - `types/` : Next.js generated route types plus custom types.
 - `docs/DC/airiam-ticket-triage-architecture.md` : source-of-truth doc.
+- `docs/DC/airiam-ticket-triage-roadmap.md` : delivery roadmap, phase order, blocker register, and progress checklist.
 - `docs/requirements/legacy/` : historical reference only.
 
 ### Planned additions
@@ -310,10 +311,11 @@ A change is done when:
 When starting a non-trivial task, orient by reading, in this order:
 
 1. `docs/DC/airiam-ticket-triage-architecture.md` for scope and locked decisions.
-2. This `AGENTS.md` for rules.
-3. The relevant Feature or Provider module's file-level docstring.
-4. The relevant migration file(s) for schema context.
-5. `package.json` for available scripts and dependencies.
+2. `docs/DC/airiam-ticket-triage-roadmap.md` for phase order, open blockers, and current progress.
+3. This `AGENTS.md` for rules.
+4. The relevant Feature or Provider module's file-level docstring.
+5. The relevant migration file(s) for schema context.
+6. `package.json` for available scripts and dependencies.
 
 Avoid orienting from files in `docs/requirements/legacy/`. They describe a different (larger) project and will mislead.
 
