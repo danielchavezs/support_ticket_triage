@@ -34,7 +34,7 @@ Create the v1 database schema from scratch and rewrite the codebase to use it. N
 - v1 SQL migration set (extensions, 5 table creations, RLS+policies).
 - Dev-only seed script for a default `ATD-internal` org + dev user so the dashboard can keep functioning during development.
 - Updated `services/providers/supabase/domains/*.ts` (tickets domain rewritten; new `orgs`, `users` domain modules added).
-- Updated `services/features/tickets/ticketsFeatures.ts` to thread `org_id` + `user_id` through validation, triage, and persistence.
+- Updated `services/features/tickets/ticketsFeatures.ts` to thread `org_id` + `user_id` through validation and persistence, while leaving triage fields nullable for Phase 2.
 - Updated Zod schemas to the v1 `type` / `severity` enums.
 - Skeleton `services/features/triage/priorityMatrix.ts` (no logic yet — populated in Phase 2).
 - Updated `app/api/tickets/route.ts` to accept `org_id` and `user_id` from the caller (trust-on-assertion; HMAC verification comes in Phase 7).
@@ -68,17 +68,17 @@ Each PR contains the stage's checklist updates in the same diff. Every PR refere
 
 Goal: write the SQL. Not applied yet.
 
-- [ ] Author `migrations/2026-05-13_01_enable_extensions.sql` (`CREATE EXTENSION IF NOT EXISTS vector`, `CREATE EXTENSION IF NOT EXISTS pgcrypto`).
-- [ ] Author `migrations/2026-05-13_02_create_enums.sql` (`CREATE TYPE ticket_type AS ENUM (...)`, `CREATE TYPE ticket_severity AS ENUM (...)`, `CREATE TYPE ticket_priority AS ENUM ('P1','P2','P3','P4')`, `CREATE TYPE ticket_status AS ENUM ('received','triaged','duplicate','pushed_to_linear','failed','closed')`, `CREATE TYPE ticket_source_kind AS ENUM ('in_app','aip_monitoring')`, `CREATE TYPE ticket_event_type AS ENUM ('received','triaged','deduplicated','pushed_to_linear','status_changed','email_sent','failed')`).
-- [ ] Author `migrations/2026-05-13_03_create_orgs_table.sql` (id uuid PK, name text not null, status text default 'active', timestamps, soft-delete).
-- [ ] Author `migrations/2026-05-13_04_create_users_table.sql` (id uuid PK, `org_id` uuid FK → orgs, email text not null, display_name text, timestamps, soft-delete). Add a unique expression index on `(org_id, lower(email))` for case-insensitive uniqueness. **No role column** (`BL-003`).
-- [ ] Author `migrations/2026-05-13_05_create_tickets_table.sql` (id uuid PK, `org_id` FK, `user_id` FK, `source_kind` enum, subject text not null, description text not null, `type` enum nullable, `severity` enum nullable, `priority` enum nullable, `status` enum default 'received', `confidence` numeric nullable, `customer_facing_summary` text nullable, `suggested_reply` text nullable, `dedup_signature` text nullable, `duplicate_of` self-FK nullable, `linear_issue_id` text nullable, `description_embedding vector` nullable, `triage_error` text nullable, timestamps, soft-delete). Do not choose vector dimension or index until `BL-007` is resolved in Phase 3.
-- [ ] Author `migrations/2026-05-13_06_create_ticket_events_table.sql` (id uuid PK, `org_id` FK, `ticket_id` FK, `event_type` enum, `payload` jsonb not null default `'{}'::jsonb`, created_at). Carrying `org_id` on events keeps RLS and common event-list queries simple; enforce ticket/org consistency with a composite FK or trigger.
-- [ ] Author `migrations/2026-05-13_07_create_dedup_signatures_table.sql` (id uuid PK, `org_id` FK, `normalized_signature` text not null, `canonical_ticket_id` FK → tickets, created_at, unique on `(org_id, normalized_signature)`). Enforce that `canonical_ticket_id` belongs to the same `org_id` via a composite FK or equivalent constraint.
-- [ ] Author `migrations/2026-05-13_08_enable_rls_and_policies.sql` (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on every org-scoped table; per-table SELECT/INSERT/UPDATE/DELETE policies keyed on `(auth.jwt() ->> 'org_id')::uuid = org_id`, with `orgs` scoped by `id = (auth.jwt() ->> 'org_id')::uuid`).
-- [ ] Author `migrations/dev/2026-05-13_seed_dev_default.sql` or an equivalent explicitly dev-only seed file (idempotent inserts for one `ATD-internal` org row and one dev user row, with stable known UUIDs surfaced via env vars). **Do not place this in the production migration chain.**
-- [ ] Add indexes for every FK column and planned hot access path: `users.org_id`, `tickets.org_id`, `tickets.user_id`, `tickets.created_at`, `tickets.duplicate_of`, `tickets.linear_issue_id`, `ticket_events.org_id`, `ticket_events.ticket_id`, `dedup_signatures.org_id`, `dedup_signatures.canonical_ticket_id`, plus partial indexes for non-deleted rows where useful.
-- [ ] Each SQL file has a top-of-file comment with purpose + idempotency notes + rollback notes (manual DROP path if reverting).
+- [x] Author `migrations/2026-05-13_01_enable_extensions.sql` (`CREATE EXTENSION IF NOT EXISTS vector`, `CREATE EXTENSION IF NOT EXISTS pgcrypto`).
+- [x] Author `migrations/2026-05-13_02_create_enums.sql` (`CREATE TYPE ticket_type AS ENUM (...)`, `CREATE TYPE ticket_severity AS ENUM (...)`, `CREATE TYPE ticket_priority AS ENUM ('P1','P2','P3','P4')`, `CREATE TYPE ticket_status AS ENUM ('received','triaged','duplicate','pushed_to_linear','failed','closed')`, `CREATE TYPE ticket_source_kind AS ENUM ('in_app','aip_monitoring')`, `CREATE TYPE ticket_event_type AS ENUM ('received','triaged','deduplicated','pushed_to_linear','status_changed','email_sent','failed')`).
+- [x] Author `migrations/2026-05-13_03_create_orgs_table.sql` (id uuid PK, name text not null, status text default 'active', timestamps, soft-delete).
+- [x] Author `migrations/2026-05-13_04_create_users_table.sql` (id uuid PK, `org_id` uuid FK → orgs, email text not null, display_name text, timestamps, soft-delete). Add a unique expression index on `(org_id, lower(email))` for case-insensitive uniqueness. **No role column** (`BL-003`).
+- [x] Author `migrations/2026-05-13_05_create_tickets_table.sql` (id uuid PK, `org_id` FK, `user_id` FK, `source_kind` enum, subject text not null, description text not null, `type` enum nullable, `severity` enum nullable, `priority` enum nullable, `status` enum default 'received', `confidence` numeric nullable, `customer_facing_summary` text nullable, `suggested_reply` text nullable, `dedup_signature` text nullable, `duplicate_of` self-FK nullable, `linear_issue_id` text nullable, `description_embedding vector` nullable, `triage_error` text nullable, timestamps, soft-delete). Do not choose vector dimension or index until `BL-007` is resolved in Phase 3.
+- [x] Author `migrations/2026-05-13_06_create_ticket_events_table.sql` (id uuid PK, `org_id` FK, `ticket_id` FK, `event_type` enum, `payload` jsonb not null default `'{}'::jsonb`, created_at). Carrying `org_id` on events keeps RLS and common event-list queries simple; enforce ticket/org consistency with a composite FK or trigger.
+- [x] Author `migrations/2026-05-13_07_create_dedup_signatures_table.sql` (id uuid PK, `org_id` FK, `normalized_signature` text not null, `canonical_ticket_id` FK → tickets, created_at, unique on `(org_id, normalized_signature)`). Enforce that `canonical_ticket_id` belongs to the same `org_id` via a composite FK or equivalent constraint.
+- [x] Author `migrations/2026-05-13_08_enable_rls_and_policies.sql` (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY` on every org-scoped table; per-table SELECT/INSERT/UPDATE/DELETE policies keyed on `(auth.jwt() ->> 'org_id')::uuid = org_id`, with `orgs` scoped by `id = (auth.jwt() ->> 'org_id')::uuid`).
+- [x] Author `migrations/dev/2026-05-13_seed_dev_default.sql` or an equivalent explicitly dev-only seed file (idempotent inserts for one `ATD-internal` org row and one dev user row, with stable known UUIDs surfaced via env vars). **Do not place this in the production migration chain.**
+- [x] Add indexes for every FK column and planned hot access path: `users.org_id`, `tickets.org_id`, `tickets.user_id`, `tickets.created_at`, `tickets.duplicate_of`, `tickets.linear_issue_id`, `ticket_events.org_id`, `ticket_events.ticket_id`, `dedup_signatures.org_id`, `dedup_signatures.canonical_ticket_id`, plus partial indexes for non-deleted rows where useful.
+- [x] Each SQL file has a top-of-file comment with purpose + idempotency notes + rollback notes (manual DROP path if reverting).
 
 Exit criteria:
 
@@ -180,7 +180,6 @@ Exit criteria:
 
 - All four gates green locally and in CI.
 - Coverage ≥ 80% across lines, branches, functions, statements.
-- Coverage >= 80% across lines, branches, functions, statements.
 - Cross-org isolation demonstrably enforced in tests.
 
 ## 6. Verification Commands

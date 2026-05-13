@@ -111,7 +111,7 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 **Execution checklist:**
 
 - [ ] Author migration: `YYYY-MM-DD_create_orgs_table.sql` (id, name, status, timestamps, soft-delete).
-- [ ] Author migration: `YYYY-MM-DD_create_users_table.sql` (id, `org_id` FK, email, display_name, timestamps, soft-delete, unique on `(org_id, email)`). **No role column in v1 per `BL-003`; additive migration when/if roles are introduced.**
+- [ ] Author migration: `YYYY-MM-DD_create_users_table.sql` (id, `org_id` FK, email, display_name, timestamps, soft-delete, case-insensitive unique index on `(org_id, lower(email))`). **No role column in v1 per `BL-003`; additive migration when/if roles are introduced.**
 - [ ] Author migration: `YYYY-MM-DD_create_tickets_table.sql` (id, `org_id` FK, `user_id` FK, `source_kind`, raw subject/description, `type` (enum), `severity` (enum), derived/persisted `priority`, `status`, `dedup_signature`, `duplicate_of` same-org self-FK, `linear_issue_id`, `description_embedding vector` without dimension/index until Phase 3, timestamps, soft-delete). Created fresh from the v1 column set; no legacy `priority`/`category` columns exist.
 - [ ] Author migration: `YYYY-MM-DD_create_ticket_events_table.sql` (id, `org_id`, `ticket_id`, `event_type` enum, payload jsonb, created_at).
 - [ ] Author migration: `YYYY-MM-DD_create_dedup_signatures_table.sql` (id, `org_id`, `normalized_signature`, `canonical_ticket_id`, created_at, unique on `(org_id, normalized_signature)`, same-org constraint between signature and canonical ticket).

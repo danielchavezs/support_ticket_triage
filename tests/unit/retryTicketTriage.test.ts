@@ -159,7 +159,7 @@ describe('retryTicketTriageFeature', () => {
     });
 
     it('falls back to the canned acknowledgement when retry has no prior suggested_response', async () => {
-        const ticketWithoutResponse: TicketRow = { ...existingTicket, suggested_response: null };
+        const ticketWithoutResponse = { ...existingTicket, suggested_response: null } as unknown as TicketRow;
         getByIdMock.mockResolvedValue(ticketWithoutResponse);
         classifyMock.mockResolvedValue({ priority: 'Medium', category: 'Technical' });
         draftMock.mockRejectedValue(new Error('LLM Error'));
