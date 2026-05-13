@@ -177,6 +177,52 @@ describe('ticketsFeatures', () => {
       }
     });
 
+    it.each([
+      ['email', { ...{}, email: '' }, 'Email is required.'],
+      ['subject', { subject: '' }, 'Subject is required.'],
+      ['description', { description: '' }, 'Description is required.'],
+    ])('returns VALIDATION_ERROR when %s is missing', async (_field, overrides, expectedMessage) => {
+      const result = await createTicketFeature({
+        ticket: { ...validTicketInput, ...overrides },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.code).toBe('VALIDATION_ERROR');
+        expect(result.error.message).toBe(expectedMessage);
+      }
+    });
+
+    it('returns VALIDATION_ERROR when email is not a valid email address', async () => {
+      const result = await createTicketFeature({
+        ticket: { ...validTicketInput, email: 'not-an-email' },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.code).toBe('VALIDATION_ERROR');
+        expect(result.error.message).toBe('Email must be a valid email address.');
+      }
+    });
+
+    it('flags both classification and drafting failures together', async () => {
+      classifyMock.mockRejectedValue(new Error('Classification down'));
+      draftMock.mockRejectedValue(new Error('Drafting down'));
+
+      const created = makeTicketRow({
+        triage_status: 'failed',
+        triage_error: 'LLM_CLASSIFICATION_AND_RESPONSE_FAILED',
+      });
+      createMock.mockResolvedValue(created);
+
+      const result = await createTicketFeature({ ticket: validTicketInput });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.triage_error).toBe('LLM_CLASSIFICATION_AND_RESPONSE_FAILED');
+      }
+    });
+
     it('returns failure when persistence fails', async () => {
       classifyMock.mockResolvedValue({ priority: 'Medium', category: 'General' });
       draftMock.mockResolvedValue({ customerMessage: 'Hi' });

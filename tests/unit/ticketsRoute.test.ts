@@ -120,6 +120,47 @@ describe('Tickets API Route', () => {
             const response = (await POST(mockRequest)) as MockResponse;
             expect(response.status).toBe(400);
         });
+
+        it('returns 400 when body is not a JSON object', async () => {
+            // Array bodies are valid JSON but not records — exercises the isRecord guard.
+            const mockRequest = {
+                json: async () => [validPayload],
+            } as Request;
+
+            const response = (await POST(mockRequest)) as MockResponse;
+            const json = (await response.json()) as { error: { code: string } };
+
+            expect(response.status).toBe(400);
+            expect(json.error.code).toBe('VALIDATION_ERROR');
+        });
+
+        it('returns 400 when feature returns VALIDATION_ERROR', async () => {
+            const mockRequest = {
+                json: async () => validPayload,
+            } as Request;
+
+            createMock.mockResolvedValue({
+                success: false,
+                error: { code: 'VALIDATION_ERROR', message: 'Bad email.' },
+            } as Awaited<ReturnType<typeof createTicketFeature>>);
+
+            const response = (await POST(mockRequest)) as MockResponse;
+            expect(response.status).toBe(400);
+        });
+
+        it('returns 500 when feature returns a non-validation error', async () => {
+            const mockRequest = {
+                json: async () => validPayload,
+            } as Request;
+
+            createMock.mockResolvedValue({
+                success: false,
+                error: { code: 'TICKET_CREATE_FAILED', message: 'DB down.' },
+            } as Awaited<ReturnType<typeof createTicketFeature>>);
+
+            const response = (await POST(mockRequest)) as MockResponse;
+            expect(response.status).toBe(500);
+        });
     });
 });
 

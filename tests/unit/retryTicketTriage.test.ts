@@ -158,6 +158,34 @@ describe('retryTicketTriageFeature', () => {
         }
     });
 
+    it('falls back to the canned acknowledgement when retry has no prior suggested_response', async () => {
+        const ticketWithoutResponse: TicketRow = { ...existingTicket, suggested_response: null };
+        getByIdMock.mockResolvedValue(ticketWithoutResponse);
+        classifyMock.mockResolvedValue({ priority: 'Medium', category: 'Technical' });
+        draftMock.mockRejectedValue(new Error('LLM Error'));
+
+        const updatedTicket: TicketRow = {
+            ...ticketWithoutResponse,
+            priority: 'Medium',
+            category: 'Technical',
+            suggested_response:
+                "Thanks for reaching out. We've received your request and our team will review it. If you can share any additional details, we'll be able to help faster.",
+            triage_status: 'failed',
+            triage_error: 'LLM_RESPONSE_FAILED',
+        };
+        updateTriageMock.mockResolvedValue(updatedTicket);
+
+        const result = await retryTicketTriageFeature({ ticketId: '123' });
+
+        expect(updateTriageMock).toHaveBeenCalledWith(
+            '123',
+            expect.objectContaining({
+                triage_error: 'LLM_RESPONSE_FAILED',
+            }),
+        );
+        expect(result.success).toBe(true);
+    });
+
     it('returns error when update fails', async () => {
         getByIdMock.mockResolvedValue(existingTicket);
         classifyMock.mockResolvedValue({ priority: 'High', category: 'Account' });

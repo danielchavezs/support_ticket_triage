@@ -331,13 +331,14 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Create `.github/workflows/pr.yml`: on PR, run `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm test --coverage`, `pnpm build`.
-- [ ] Add Vitest coverage configuration and the required coverage provider dependency (for example `@vitest/coverage-v8`). Enforce 70% minimum on lines, branches, functions, statements; target 85%.
+- [x] Create `.github/workflows/ci.yml`: on push or PR to `dev`/`main`, run `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm build` (quality job), and `pnpm exec vitest run --coverage` (tests job). Structure mirrors the EFT support bot pattern (separate quality + tests jobs).
+- [x] Add Vitest coverage configuration and the required coverage provider dependency (`@vitest/coverage-v8`, pinned to the exact vitest version to avoid peer drift). Enforce **80%** minimum on lines, branches, functions, statements via `vitest.config.ts` `coverage.thresholds`.
+- [x] Add `.github/workflows/claude.yml` (Anthropic Claude Code action) replicating the EFT support bot template. Requires `ANTHROPIC_API_KEY` secret in the repo settings.
 - [ ] Add a coverage-report comment step on PRs (optional but recommended).
-- [ ] Add secret-scanning to the PR workflow (e.g., `gitleaks` or GitHub native).
+- [ ] Add secret-scanning to the CI workflow (e.g., `gitleaks` or GitHub native).
 - [ ] Create `.github/workflows/deploy-dev.yml`: on merge to `main`, deploy to deployed-dev. *(Deployment step is stubbed until Phase 9 finalizes hosting.)*
 - [ ] Create `.github/workflows/deploy-prod.yml`: manual `workflow_dispatch` only, requires `prod` environment approval.
-- [ ] Ensure agent-authored PRs cannot self-approve (branch protection on `dev` and `main` requires human review).
+- [ ] Ensure agent-authored PRs cannot self-approve (branch protection on `dev` and `main` requires human review). **GitHub repo-settings UI action; not a CI workflow change.**
 - [ ] Document the workflow in `AGENTS.md` §8 if anything changes from the current branching rules.
 - [ ] Verify a sample PR exercises all gates green.
 
@@ -406,7 +407,7 @@ Minimum pre-PR gates (enforced locally and in CI from Phase 8 onward):
 - `pnpm test` (`pnpm test --coverage` once Phase 8 configures coverage)
 - `pnpm build`
 
-Coverage thresholds: 70% minimum (CI-enforced), 85% target.
+Coverage thresholds: 80% minimum across lines, branches, functions, statements (CI-enforced via `vitest.config.ts`).
 
 Priority test surfaces (called out in `AGENTS.md` §9 too):
 
