@@ -6,15 +6,23 @@ import { cookies } from "next/headers";
 export const createServerClient = async (): Promise<SupabaseClient> => {
 	const cookieStore = await cookies();
 
-  const url = process.env.SUPABASE_URL;
-  const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // Prefer the server-only var; fall back to the NEXT_PUBLIC_ mirror if the
+  // browser-safe one is the only one set. Publishable keys are RLS-respecting
+  // and safe to read on either side.
+  const publishableKey =
+    process.env.SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
-  if (!url) throw new Error('Missing env var: SUPABASE_URL');
-  if (!anonKey) throw new Error('Missing env var: SUPABASE_ANON_KEY or NEXT_PUBLIC_SUPABASE_ANON_KEY');
+  if (!url) throw new Error('Missing env var: NEXT_PUBLIC_SUPABASE_URL');
+  if (!publishableKey) {
+    throw new Error(
+      'Missing env var: SUPABASE_PUBLISHABLE_KEY or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+    );
+  }
 
 	return supabaseClient(
 		url,
-		anonKey,
+		publishableKey,
 		{
 			cookies: {
 				getAll() {

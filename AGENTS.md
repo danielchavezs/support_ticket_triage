@@ -259,9 +259,10 @@ Never commit secrets. Use `.env.local` locally. Use Azure environment-scoped sec
 
 | Key | Required | Scope | Description |
 |---|---|---|---|
-| `SUPABASE_URL` | Yes | Server | Supabase project URL. |
-| `SUPABASE_ANON_KEY` | Yes | Server | Supabase anon key for non-admin paths. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server-only | Service-role key for admin paths only. **Never expose to the browser.** |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Browser + Server | Supabase project URL. URLs are not secrets; server reads this rather than a separate `SUPABASE_URL`. |
+| `SUPABASE_PUBLISHABLE_KEY` | Yes | Server | Supabase publishable key (new `sb_publishable_*` format or legacy `anon` JWT). RLS still applies. |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | When browser-side Supabase is used | Browser + Server | Same value as `SUPABASE_PUBLISHABLE_KEY`; the `NEXT_PUBLIC_` prefix tells Next.js to inline it for client components. |
+| `SUPABASE_SECRET_KEY` | Yes | Server-only | Supabase secret key (new `sb_secret_*` format or legacy `service_role` JWT). **BYPASSES RLS.** Never expose to the browser. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | Yes | Server | Google Generative AI / Gemini API key. |
 | `AI_MODEL` | Optional | Server | Override for the default Gemini model (default: `gemini-2.5-flash-lite`). |
 | `LINEAR_API_KEY` | Yes (once Linear feature lands) | Server | Linear API key, scoped to the ATD workspace. |
