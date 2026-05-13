@@ -10,51 +10,249 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "14.1"
+    PostgrestVersion: "14.5"
   }
   public: {
     Tables: {
-      tickets: {
+      dedup_signatures: {
         Row: {
-          category: string
+          canonical_ticket_id: string
           created_at: string
-          customer_name: string
-          description: string
-          email: string
           id: string
-          priority: string
-          subject: string
-          suggested_response: string
-          triage_error: string | null
-          triage_status: string
+          normalized_signature: string
+          org_id: string
         }
         Insert: {
-          category: string
+          canonical_ticket_id: string
           created_at?: string
-          customer_name: string
-          description: string
-          email: string
           id?: string
-          priority: string
-          subject: string
-          suggested_response: string
-          triage_error?: string | null
-          triage_status?: string
+          normalized_signature: string
+          org_id: string
         }
         Update: {
-          category?: string
+          canonical_ticket_id?: string
           created_at?: string
-          customer_name?: string
-          description?: string
-          email?: string
           id?: string
-          priority?: string
-          subject?: string
-          suggested_response?: string
-          triage_error?: string | null
-          triage_status?: string
+          normalized_signature?: string
+          org_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "dedup_signatures_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dedup_signatures_ticket_org_fk"
+            columns: ["canonical_ticket_id", "org_id"]
+            isOneToOne: false
+            referencedRelation: "tickets"
+            referencedColumns: ["id", "org_id"]
+          },
+        ]
+      }
+      orgs: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          id: string
+          name: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          name: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          id?: string
+          name?: string
+          status?: string
+          updated_at?: string
         }
         Relationships: []
+      }
+      ticket_events: {
+        Row: {
+          created_at: string
+          event_type: Database["public"]["Enums"]["ticket_event_type"]
+          id: string
+          org_id: string
+          payload: Json
+          ticket_id: string
+        }
+        Insert: {
+          created_at?: string
+          event_type: Database["public"]["Enums"]["ticket_event_type"]
+          id?: string
+          org_id: string
+          payload?: Json
+          ticket_id: string
+        }
+        Update: {
+          created_at?: string
+          event_type?: Database["public"]["Enums"]["ticket_event_type"]
+          id?: string
+          org_id?: string
+          payload?: Json
+          ticket_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ticket_events_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ticket_events_ticket_org_fk"
+            columns: ["ticket_id", "org_id"]
+            isOneToOne: false
+            referencedRelation: "tickets"
+            referencedColumns: ["id", "org_id"]
+          },
+        ]
+      }
+      tickets: {
+        Row: {
+          confidence: number | null
+          created_at: string
+          customer_facing_summary: string | null
+          dedup_signature: string | null
+          deleted_at: string | null
+          description: string
+          description_embedding: string | null
+          duplicate_of: string | null
+          id: string
+          linear_issue_id: string | null
+          org_id: string
+          priority: Database["public"]["Enums"]["ticket_priority"] | null
+          severity: Database["public"]["Enums"]["ticket_severity"] | null
+          source_kind: Database["public"]["Enums"]["ticket_source_kind"]
+          status: Database["public"]["Enums"]["ticket_status"]
+          subject: string
+          suggested_reply: string | null
+          triage_error: string | null
+          type: Database["public"]["Enums"]["ticket_type"] | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          confidence?: number | null
+          created_at?: string
+          customer_facing_summary?: string | null
+          dedup_signature?: string | null
+          deleted_at?: string | null
+          description: string
+          description_embedding?: string | null
+          duplicate_of?: string | null
+          id?: string
+          linear_issue_id?: string | null
+          org_id: string
+          priority?: Database["public"]["Enums"]["ticket_priority"] | null
+          severity?: Database["public"]["Enums"]["ticket_severity"] | null
+          source_kind: Database["public"]["Enums"]["ticket_source_kind"]
+          status?: Database["public"]["Enums"]["ticket_status"]
+          subject: string
+          suggested_reply?: string | null
+          triage_error?: string | null
+          type?: Database["public"]["Enums"]["ticket_type"] | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          confidence?: number | null
+          created_at?: string
+          customer_facing_summary?: string | null
+          dedup_signature?: string | null
+          deleted_at?: string | null
+          description?: string
+          description_embedding?: string | null
+          duplicate_of?: string | null
+          id?: string
+          linear_issue_id?: string | null
+          org_id?: string
+          priority?: Database["public"]["Enums"]["ticket_priority"] | null
+          severity?: Database["public"]["Enums"]["ticket_severity"] | null
+          source_kind?: Database["public"]["Enums"]["ticket_source_kind"]
+          status?: Database["public"]["Enums"]["ticket_status"]
+          subject?: string
+          suggested_reply?: string | null
+          triage_error?: string | null
+          type?: Database["public"]["Enums"]["ticket_type"] | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tickets_duplicate_org_fk"
+            columns: ["duplicate_of", "org_id"]
+            isOneToOne: false
+            referencedRelation: "tickets"
+            referencedColumns: ["id", "org_id"]
+          },
+          {
+            foreignKeyName: "tickets_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tickets_user_org_fk"
+            columns: ["user_id", "org_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id", "org_id"]
+          },
+        ]
+      }
+      users: {
+        Row: {
+          created_at: string
+          deleted_at: string | null
+          display_name: string | null
+          email: string
+          id: string
+          org_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          deleted_at?: string | null
+          display_name?: string | null
+          email: string
+          id?: string
+          org_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          deleted_at?: string | null
+          display_name?: string | null
+          email?: string
+          id?: string
+          org_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "users_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
@@ -64,7 +262,25 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      ticket_event_type:
+        | "received"
+        | "triaged"
+        | "deduplicated"
+        | "pushed_to_linear"
+        | "status_changed"
+        | "email_sent"
+        | "failed"
+      ticket_priority: "P1" | "P2" | "P3" | "P4"
+      ticket_severity: "blocker" | "major" | "minor" | "trivial"
+      ticket_source_kind: "in_app" | "aip_monitoring"
+      ticket_status:
+        | "received"
+        | "triaged"
+        | "duplicate"
+        | "pushed_to_linear"
+        | "failed"
+        | "closed"
+      ticket_type: "bug" | "feature" | "improvement" | "question" | "incident"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -191,6 +407,28 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      ticket_event_type: [
+        "received",
+        "triaged",
+        "deduplicated",
+        "pushed_to_linear",
+        "status_changed",
+        "email_sent",
+        "failed",
+      ],
+      ticket_priority: ["P1", "P2", "P3", "P4"],
+      ticket_severity: ["blocker", "major", "minor", "trivial"],
+      ticket_source_kind: ["in_app", "aip_monitoring"],
+      ticket_status: [
+        "received",
+        "triaged",
+        "duplicate",
+        "pushed_to_linear",
+        "failed",
+        "closed",
+      ],
+      ticket_type: ["bug", "feature", "improvement", "question", "incident"],
+    },
   },
 } as const
