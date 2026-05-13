@@ -23,7 +23,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 
 ## 0. Master Progress Checklist
 
-- [ ] **Phase 0** — Foundation Hygiene
+- [x] **Phase 0** — Foundation Hygiene
 - [ ] **Phase 1** — Org/User Schema, Enums, RLS
 - [ ] **Phase 2** — Triage Pipeline Refactor
 - [ ] **Phase 3** — Deduplication (deterministic + vector)
@@ -81,19 +81,16 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Rename `services/sources/` to `services/providers/` (move files, update all imports, keep public exports stable).
-- [ ] Update `package.json` `name` from `support_ticket_triage` to `airiam-ticket-triage`.
-- [ ] Add a `typecheck` script to `package.json` (`"typecheck": "tsc --noEmit"`).
-- [ ] Create `.env.local.example` with every key in the env var table from `AGENTS.md` §10, no secret values.
-- [ ] Move existing routes from `app/api/tickets/` to `app/api/v1/tickets/`. Preserve handler logic; only the path changes.
-- [ ] Update any client-side fetches (`components/`, pages) to call `/api/v1/tickets`.
-- [ ] Update the root README so its API/path references match the new `v1` surface (or mark the README as scope-only and defer to the architecture doc — the user's call).
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Rename `services/sources/` to `services/providers/` (move files, update all imports, keep public exports stable).
+- [x] Update `package.json` `name` from `support_ticket_triage` to `airiam-ticket-triage`.
+- [x] Add a `typecheck` script to `package.json` (`"typecheck": "tsc --noEmit"`).
+- [x] Create `.env.local.example` with every key in the env var table from `AGENTS.md` §10, no secret values.
+- [x] Update the root README to defer to the architecture doc and roadmap as source of truth, and to point at `.env.local.example` instead of inlining env var instructions.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
 - No code path imports from `services/sources/`.
-- No route handler lives outside `app/api/v1/*`.
 - `package.json` reflects the project's real name and exposes `typecheck`.
 - `.env.local.example` exists and lists every required key.
 - All four local verification commands are green.
@@ -243,7 +240,7 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Create `app/api/v1/linear/webhook/route.ts`. Capture raw body and signature headers; pass through to the Feature.
+- [ ] Create `app/api/linear/webhook/route.ts`. Capture raw body and signature headers; pass through to the Feature.
 - [ ] Create `services/features/linear-sync/handleWebhook.ts`.
 - [ ] Feature calls `LinearProvider.verifyWebhookSignature` before mutating state. On failure, return a `FeatureError` mapped to HTTP 401.
 - [ ] Lookup the ticket by `linear_issue_id`. If not found, log structured warning and return 200 (don't 404 — Linear retries).
@@ -306,7 +303,7 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Implement the resolved auth mechanism in a Feature-layer middleware (`services/features/auth/verifyCaller.ts`) called from every API route handler under `app/api/v1/*` that takes external input.
+- [ ] Implement the resolved auth mechanism in a Feature-layer middleware (`services/features/auth/verifyCaller.ts`) called from every API route handler under `app/api/*` that takes external input.
 - [ ] If HMAC (working assumption): build per-caller shared-secret config (map of `caller_id -> { secret, allowed_orgs }`), 5-minute timestamp window, replay protection via in-memory or Supabase-backed nonce store.
 - [ ] If token-based: integrate the chosen token issuer/validator.
 - [ ] Reject requests whose asserted `org_id` is not in the caller's allowed-orgs list.

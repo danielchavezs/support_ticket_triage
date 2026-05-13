@@ -1,6 +1,6 @@
 'server-only';
 
-import type { TicketClassification } from '@/services/sources/llm/ticketTriageSchemas';
+import type { TicketClassification } from '@/services/providers/llm/ticketTriageSchemas';
 
 export function buildTicketCustomerReplyPrompt(input: TicketClassification & { subject?: string }): string {
   const subjectLine = input.subject?.trim() ? `Subject: ${input.subject.trim()}` : null;

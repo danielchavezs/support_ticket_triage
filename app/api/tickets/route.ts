@@ -1,6 +1,6 @@
 import { createTicketFeature, listTicketsFeature } from '@/services/features/tickets';
 import { NextResponse } from 'next/server';
-import type { TicketRow } from '@/services/sources/supabase/domains/tickets';
+import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 export const runtime = 'nodejs';
 

@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 
-import type { TicketCategory, TicketPriority } from '@/services/sources/supabase/domains/tickets';
+import type { TicketCategory, TicketPriority } from '@/services/providers/supabase/domains/tickets';
 
 export const priorities = ['Critical', 'High', 'Medium', 'Low'] as const satisfies readonly TicketPriority[];
 export const categories = ['Billing', 'Technical', 'Account', 'General'] as const satisfies readonly TicketCategory[];

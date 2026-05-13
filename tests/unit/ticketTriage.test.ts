@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
-import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/sources/llm/ticketTriage';
+import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/providers/llm/ticketTriage';
 import { generateObject } from 'ai';
 import type { GenerateObjectResult } from 'ai';
 

@@ -3,14 +3,14 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateObject, type LanguageModel } from 'ai';
 
-import { buildTicketClassificationPrompt } from '@/services/sources/llm/prompts/ticketClassificationPrompt';
-import { buildTicketCustomerReplyPrompt } from '@/services/sources/llm/prompts/ticketCustomerReplyPrompt';
+import { buildTicketClassificationPrompt } from '@/services/providers/llm/prompts/ticketClassificationPrompt';
+import { buildTicketCustomerReplyPrompt } from '@/services/providers/llm/prompts/ticketCustomerReplyPrompt';
 import {
   TicketClassificationSchema,
   TicketCustomerReplySchema,
   type TicketClassification,
   type TicketCustomerReply,
-} from '@/services/sources/llm/ticketTriageSchemas';
+} from '@/services/providers/llm/ticketTriageSchemas';
 
 function getGoogleModel(): LanguageModel {
   const modelId = process.env.AI_MODEL ?? 'gemini-2.5-flash-lite';

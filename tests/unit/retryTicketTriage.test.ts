@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
 import { retryTicketTriageFeature } from '@/services/features/tickets/ticketsFeatures';
-import { server as sources } from '@/services/sources/supabase/server';
-import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/sources/llm/ticketTriage';
-import type { TicketRow } from '@/services/sources/supabase/domains/tickets';
+import { server as sources } from '@/services/providers/supabase/server';
+import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/providers/llm/ticketTriage';
+import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
-vi.mock('@/services/sources/supabase/server', () => ({
+vi.mock('@/services/providers/supabase/server', () => ({
     server: {
         tickets: {
             getById: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock('@/services/sources/supabase/server', () => ({
     },
 }));
 
-vi.mock('@/services/sources/llm/ticketTriage', () => ({
+vi.mock('@/services/providers/llm/ticketTriage', () => ({
     classifyTicketWithLlm: vi.fn(),
     draftCustomerReplyWithLlm: vi.fn(),
 }));

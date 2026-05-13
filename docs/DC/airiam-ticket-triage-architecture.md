@@ -54,7 +54,7 @@ Standalone in v1. The project mirrors AIP's layered architecture (Providers / Fe
                                 v
                        +-------------------------+
                        |  Next.js API            |
-                       |  app/api/v1/tickets     |
+                       |  app/api/tickets        |
                        +-----------+-------------+
                                    |
                                    v
@@ -110,20 +110,20 @@ Three layers. Strict one-way dependency direction.
 - **Cross-Provider composition** happens at the Feature layer, never inside a Provider.
 - **Features may call other Features** when the coupling is domain-local. When it would create a cycle, the responsibility belongs in a higher-level orchestrator Feature or on a queue / event boundary.
 
-### Layer rename note
-
-The existing codebase uses `services/sources/`. The new convention is `services/providers/`, aligned with AIP and the design-team-rag project. The rename is a pending refactor, not yet executed. All new work should be written as if the rename is complete (i.e., reason about Providers, not Sources), and any module being touched as part of a wider change should be migrated opportunistically.
-
 ## Current Implementation Gap Snapshot
 
-Observed on 2026-05-12. These are implementation gaps against this document, not alternate scope:
+Last reviewed on 2026-05-13. These are implementation gaps against this document, not alternate scope.
 
-- `package.json` still uses the legacy name `support_ticket_triage` and does not expose a `typecheck` script.
-- Existing REST routes live under `app/api/tickets/`; the target API surface is `app/api/v1/*`.
-- Existing integration adapters live under `services/sources/`; the target convention is `services/providers/`.
-- The current migration creates a legacy public `tickets` table with no `org_id`, no `user_id`, no RLS policies, and legacy `priority` / `category` enums.
-- Current triage values (`Critical | High | Medium | Low` and `Billing | Technical | Account | General`) are legacy MVP values. The target v1 model uses `severity`, `type`, and deterministic `priority`.
-- No `.env.local.example` exists yet; root README environment guidance is legacy and lower precedence than this document.
+Closed by Phase 0 (AIR-190):
+
+- ~~`package.json` legacy name and missing `typecheck` script.~~ Resolved: name is `airiam-ticket-triage`; `typecheck` script added.
+- ~~Existing integration adapters under `services/sources/`.~~ Resolved: renamed to `services/providers/`.
+- ~~No `.env.local.example`.~~ Resolved: template exists at the repo root and lists every key in `AGENTS.md` §10.
+
+Open (gated by later phases):
+
+- The current migration creates a legacy public `tickets` table with no `org_id`, no `user_id`, no RLS policies, and legacy `priority` / `category` enums. Closed by Phase 1 once `BL-001` / `BL-002` / `BL-003` are resolved.
+- Current triage values (`Critical | High | Medium | Low` and `Billing | Technical | Account | General`) are legacy MVP values. The target v1 model uses `severity`, `type`, and deterministic `priority`. Closed by Phase 2.
 
 ## Data Layer
 
@@ -262,7 +262,7 @@ Deferred.
 ### Direction
 
 - **v1 outbound:** every triaged ticket is pushed as a new issue into the ATD team's Triage queue in the team-scoped Linear workspace. The Linear issue ID is persisted on the ticket row.
-- **v1 inbound (curated):** a webhook listener under `app/api/v1/linear/webhook` receives status-change events from Linear, filters to a curated subset of transitions, updates the ticket row, emits `ticket.status_changed`, and triggers a status email if the transition is in the customer-facing subset.
+- **v1 inbound (curated):** a webhook listener under `app/api/linear/webhook` receives status-change events from Linear, filters to a curated subset of transitions, updates the ticket row, emits `ticket.status_changed`, and triggers a status email if the transition is in the customer-facing subset.
 
 ### Workspace specifics
 

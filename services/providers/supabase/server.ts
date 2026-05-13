@@ -1,7 +1,7 @@
 'server-only';
 
-import { createServerClient } from '@/services/sources/supabase/clients/server';
-import { makeTickets, type TicketsSource } from '@/services/sources/supabase/domains/tickets';
+import { createServerClient } from '@/services/providers/supabase/clients/server';
+import { makeTickets, type TicketsSource } from '@/services/providers/supabase/domains/tickets';
 
 export type ServerSources = {
   tickets: TicketsSource;

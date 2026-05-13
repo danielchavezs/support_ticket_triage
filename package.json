@@ -1,5 +1,5 @@
 {
-  "name": "support_ticket_triage",
+  "name": "airiam-ticket-triage",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "gen-types": "supabase gen types typescript --project-id \"byfqtbzdxpoxfjtwojbz\" --schema public > assets/databaseTypes.ts",
     "test": "vitest --run",
     "test:watch": "vitest"

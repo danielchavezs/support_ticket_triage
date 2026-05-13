@@ -25,7 +25,7 @@ When sources disagree, this is the order:
 
 - Language: TypeScript only.
 - Runtime: Next.js 16 (App Router) + React 19, single deployable serving UI and API.
-- API: REST via Next.js Route Handlers under `app/api/v1/*`.
+- API: REST via Next.js Route Handlers under `app/api/*`.
 - UI: Tailwind CSS v4 + shadcn/ui. No CSS modules, no plain CSS for new work.
 - Forms: react-hook-form + Zod (planned; not yet wired).
 - Data client: TanStack Query (planned, only when a real client read surface exists).
@@ -44,10 +44,10 @@ When sources disagree, this is the order:
 ### Current
 
 - `app/` : Next.js App Router. Pages, layouts, API Route Handlers.
-- `app/api/tickets/` : REST endpoints (existing fork).
+- `app/api/` : REST route handlers.
 - `components/` : React UI components.
 - `services/features/` : business orchestration layer.
-- `services/sources/` : external integration adapters. **Pending rename to `services/providers/`.**
+- `services/providers/` : external integration adapters (Supabase, LLM, future Linear/email).
 - `migrations/` : SQL migrations applied via the Supabase CLI.
 - `tests/unit/` : Vitest unit tests.
 - `assets/databaseTypes.ts` : Supabase-generated TS types.
@@ -65,7 +65,7 @@ When sources disagree, this is the order:
 - `services/features/triage/` : triage orchestration (the current triage logic moves and grows here).
 - `services/features/linear-sync/` : outbound push and inbound webhook handling.
 - `services/features/notifications/` : email orchestration.
-- `app/api/v1/linear/webhook/` : inbound webhook handler.
+- `app/api/linear/webhook/` : inbound webhook handler.
 - `.github/workflows/` : CI/CD.
 
 ## 5. Layer Pattern (MANDATORY for new code)
@@ -79,7 +79,7 @@ APP (app/, components/) -> FEATURES (services/features/) -> PROVIDERS (services/
 ### App layer rules (`app/`, `components/`)
 
 - Owns Next.js routing, rendering, form handling, API surface.
-- API Route Handlers under `app/api/v1/*` are thin transport; they call Features and map results to HTTP.
+- API Route Handlers under `app/api/*` are thin transport; they call Features and map results to HTTP.
 - MUST NOT import Providers directly.
 - MUST NOT contain business logic, validation rules, or external SDK calls.
 
@@ -190,7 +190,25 @@ This repository uses **Claude Code** as the primary coding agent. If Codex or An
 
 This section is informational until a second agent is actually used in this repo.
 
-## 8. Branching and PR Workflow
+## 8. Linear Workspace Scope, Branching, and PR Workflow
+
+### Linear MCP and project scope (MANDATORY)
+
+This project uses Linear from the Airiam Advanced Tech Division workspace only. Agents must respect the scope below for every Linear read or write.
+
+- **Workspace:** `airiamspace`.
+- **Team:** `Airiamspace` (key `AIR`, id `c66f57f7-2728-4ea5-86e0-dc6f7907a869`).
+- **Project:** `ticket-triage` (id `e5230b15-9aac-4729-9992-68b1f26bedff`, URL `https://linear.app/airiamspace/project/ticket-triage-228763df997d`).
+- **MCP server:** the Airiam-scoped Linear MCP server (id starts with `3dda139b-...`) is the only permitted Linear integration for this project.
+
+Rules:
+
+- The `linear-personal` MCP server is **forbidden** for any work in this repository. Issue creates, edits, comments, and reads must all go through the Airiam-scoped server.
+- Every Linear operation must scope to the `AIR` team and the `ticket-triage` project. Creating issues outside that project is a process violation.
+- If a task appears to require touching another team, workspace, or project, stop and ask for explicit confirmation before proceeding.
+- When linking a Linear issue from a commit, PR, or doc, prefer the issue identifier (`AIR-NNN`) or the canonical issue URL on `linear.app/airiamspace`.
+
+### Branching
 
 - Branch from latest `dev`.
 - Feature branches: `feature/<short-description>`.

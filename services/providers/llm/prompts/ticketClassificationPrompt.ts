@@ -1,6 +1,6 @@
 'server-only';
 
-import { categories, priorities } from '@/services/sources/llm/ticketTriageSchemas';
+import { categories, priorities } from '@/services/providers/llm/ticketTriageSchemas';
 
 export function buildTicketClassificationPrompt(input: {
   subject: string;

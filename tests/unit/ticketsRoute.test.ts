@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
 import { GET, POST } from '@/app/api/tickets/route';
 import { listTicketsFeature, createTicketFeature } from '@/services/features/tickets';
-import type { TicketRow } from '@/services/sources/supabase/domains/tickets';
+import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 // Mock feature layer
 vi.mock('@/services/features/tickets', () => ({

@@ -1,13 +1,13 @@
 import { fail, ok, type FeatureResult } from '@/services/features/types';
-import { server as sources } from '@/services/sources/supabase/server';
-import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/sources/llm/ticketTriage';
+import { server as sources } from '@/services/providers/supabase/server';
+import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/providers/llm/ticketTriage';
 import { isValidEmail } from '@/services/features/tickets/validation';
 import type {
   NewTicketRow,
   TicketCategory,
   TicketPriority,
   TicketRow,
-} from '@/services/sources/supabase/domains/tickets';
+} from '@/services/providers/supabase/domains/tickets';
 
 export type NewTicketInput = {
   customerName: string;
