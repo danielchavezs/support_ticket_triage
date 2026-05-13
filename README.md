@@ -55,9 +55,9 @@ cp .env.local.example .env.local
 
 ### 3) Supabase schema
 
-Apply migrations from `migrations/` to your Supabase project. The current applied baseline is:
+No schema exists yet. Phase 1 lands the v1 tables (`orgs`, `users`, `tickets`, `ticket_events`, `dedup_signatures`) plus RLS policies via SQL migrations under `migrations/`, applied to a fresh Supabase project per the architecture doc.
 
-- `migrations/2026-02-05_create_tickets.sql` — legacy single-table tickets schema (will be superseded by Phase 1 migrations: `orgs`, `users`, updated `tickets`, `ticket_events`, `dedup_signatures` with RLS).
+Until Phase 1 lands, the app cannot persist tickets end-to-end against a real Supabase project. The current code still references Provider methods that expect a schema that has not been created.
 
 ### 4) Run the app
 

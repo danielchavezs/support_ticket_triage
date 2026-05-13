@@ -46,9 +46,9 @@ Agents must not implement past a blocker. If a phase looks blocked, stop, surfac
 
 | ID | Decision | Gates Phase | Status | Owner | Resolution |
 |---|---|---|---|---|---|
-| `BL-001` | Priority matrix validated against ATD triage practice (or replaced) | Phase 1, Phase 2 | Open | Daniel + ATD leads | — |
-| `BL-002` | `type` + `severity` enum values validated against ATD labelling practice | Phase 1, Phase 2 | Open | Daniel + ATD leads | — |
-| `BL-003` | Role model on `users` table (admin / submitter / read-only / etc., or none for v1) | Phase 1 | Open | Daniel | — |
+| `BL-001` | Priority matrix validated against ATD triage practice (or replaced) | Phase 1, Phase 2 | **Resolved 2026-05-13** | Daniel | Draft matrix approved as-is. Lands as `services/features/triage/priorityMatrix.ts` in Phase 2. |
+| `BL-002` | `type` + `severity` enum values validated against ATD labelling practice | Phase 1, Phase 2 | **Resolved 2026-05-13** | Daniel | Both enums approved as-drafted. `type`: `bug \| feature \| improvement \| question \| incident`. `severity`: `blocker \| major \| minor \| trivial`. |
+| `BL-003` | Role model on `users` table (admin / submitter / read-only / etc., or none for v1) | Phase 1 | **Resolved 2026-05-13** | Daniel | **No role column in v1.** Additive path preserved — adding a role column or `roles` table later is a future migration, documented in the architecture's Roadmap and Modularity Seams table. |
 | `BL-004` | Dedup action on hit (reject, link, merge, soft-flag only) | Phase 3 | Open | Daniel | — |
 | `BL-005` | Dedup time window (forever, 30d, 90d, per-org configurable) | Phase 3 | Open | Daniel | — |
 | `BL-006` | Vector dedup default state (on, off, behind feature flag) | Phase 3 | Open | Daniel | — |
@@ -99,22 +99,22 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 ### Phase 1 — Org/User Schema, Enums, RLS
 
-**Goal:** introduce org-scoped persistence with the v1 data model (`orgs`, `users`, updated `tickets`, `ticket_events`, `dedup_signatures`) and RLS, replacing the legacy single-table `tickets` schema.
+**Goal:** create the v1 schema from scratch — `orgs`, `users`, `tickets` (with the full v1 column set including `org_id`, `user_id`, `type`, `severity`, derived `priority`, embedding column), `ticket_events`, `dedup_signatures`, plus RLS on every org-scoped table. No DB exists yet; no ALTER or data migration is involved.
 
 **Prerequisites:**
 
-- [ ] Phase 0 complete.
-- [ ] `BL-001` (priority matrix) resolved.
-- [ ] `BL-002` (`type` + `severity` enums) resolved.
-- [ ] `BL-003` (role model) resolved — even "no roles in v1" counts as resolution.
+- [x] Phase 0 complete.
+- [x] `BL-001` (priority matrix) resolved.
+- [x] `BL-002` (`type` + `severity` enums) resolved.
+- [x] `BL-003` (role model) resolved — no role column in v1.
 
 **Execution checklist:**
 
 - [ ] Author migration: `YYYY-MM-DD_create_orgs_table.sql` (id, name, status, timestamps, soft-delete).
-- [ ] Author migration: `YYYY-MM-DD_create_users_table.sql` (id, `org_id` FK, email, display_name, optional role column if `BL-003` includes one, timestamps, soft-delete, unique on `(org_id, email)`).
-- [ ] Author migration: `YYYY-MM-DD_alter_tickets_for_v1.sql` (add `org_id`, `user_id`, `source_kind`, new enums `ticket_type`, `ticket_severity`, derived/persisted `priority`, `linear_issue_id`, `description_embedding vector`, `deleted_at`, retire legacy `priority`/`category` columns).
-- [ ] Author migration: `YYYY-MM-DD_create_ticket_events_table.sql` (id, `ticket_id`, `event_type` enum, payload jsonb, created_at).
-- [ ] Author migration: `YYYY-MM-DD_create_dedup_signatures_table.sql` (id, `org_id`, `normalized_signature`, `canonical_ticket_id`, created_at, unique on `(org_id, normalized_signature)`).
+- [ ] Author migration: `YYYY-MM-DD_create_users_table.sql` (id, `org_id` FK, email, display_name, timestamps, soft-delete, unique on `(org_id, email)`). **No role column in v1 per `BL-003`; additive migration when/if roles are introduced.**
+- [ ] Author migration: `YYYY-MM-DD_create_tickets_table.sql` (id, `org_id` FK, `user_id` FK, `source_kind`, raw subject/description, `type` (enum), `severity` (enum), derived/persisted `priority`, `status`, `dedup_signature`, `duplicate_of` same-org self-FK, `linear_issue_id`, `description_embedding vector` without dimension/index until Phase 3, timestamps, soft-delete). Created fresh from the v1 column set; no legacy `priority`/`category` columns exist.
+- [ ] Author migration: `YYYY-MM-DD_create_ticket_events_table.sql` (id, `org_id`, `ticket_id`, `event_type` enum, payload jsonb, created_at).
+- [ ] Author migration: `YYYY-MM-DD_create_dedup_signatures_table.sql` (id, `org_id`, `normalized_signature`, `canonical_ticket_id`, created_at, unique on `(org_id, normalized_signature)`, same-org constraint between signature and canonical ticket).
 - [ ] Author migration: `YYYY-MM-DD_enable_rls_and_policies.sql` (enable RLS on every org-scoped table; add per-table SELECT/INSERT/UPDATE policies keyed on `auth.jwt() ->> 'org_id'`).
 - [ ] Apply all migrations to local Supabase project.
 - [ ] Regenerate Supabase types via `pnpm gen-types`.

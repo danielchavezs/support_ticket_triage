@@ -122,8 +122,8 @@ Closed by Phase 0 (AIR-190):
 
 Open (gated by later phases):
 
-- The current migration creates a legacy public `tickets` table with no `org_id`, no `user_id`, no RLS policies, and legacy `priority` / `category` enums. Closed by Phase 1 once `BL-001` / `BL-002` / `BL-003` are resolved.
-- Current triage values (`Critical | High | Medium | Low` and `Billing | Technical | Account | General`) are legacy MVP values. The target v1 model uses `severity`, `type`, and deterministic `priority`. Closed by Phase 2.
+- **No DB schema exists yet.** The forked-project migration from 2026-02-05 has been deleted; it described a single-table shape that was never applied for this project and is no longer relevant. Phase 1 lands the v1 schema fresh: `orgs`, `users`, `tickets` (with `org_id`, `user_id`, new enums, derived `priority`, embedding column), `ticket_events`, `dedup_signatures`, plus RLS on every org-scoped table.
+- The current Provider/Feature/route code still references legacy triage shapes (`priority: 'Critical' | 'High' | …`, `category: 'Billing' | …`). Phase 1 rewrites the Provider domain types and Zod schemas to the v1 model; Phase 2 wires the deterministic priority matrix.
 
 ## Data Layer
 
@@ -141,12 +141,12 @@ Authoritative schema lives in `migrations/`. v1 starter tables:
 | Table | Purpose |
 |---|---|
 | `orgs` | Authorized calling organizations. Holds the org identifier the calling app asserts plus metadata (name, status). |
-| `users` | Authorized users, scoped by `org_id`. Holds the user identifier each calling app asserts plus metadata (email, display name). Roles deferred. |
+| `users` | Authorized users, scoped by `org_id`. Holds the user identifier each calling app asserts plus metadata (email, display name). **No role column in v1** (`BL-003` resolved 2026-05-13). Roles remain a planned post-v1 addition; the seam is preserved in the Roadmap and Modularity Seams table below. |
 | `tickets` | One row per submitted ticket. Carries `org_id`, `user_id`, source kind, raw submission, LLM-classified `type` and `severity`, computed `priority`, status, dedup linkage, Linear issue reference, embeddings. |
-| `ticket_events` | Append-only event log per ticket. Lightweight audit trail. v1 captures: `received`, `triaged`, `deduplicated`, `pushed_to_linear`, `status_changed`, `email_sent`, `failed`. |
+| `ticket_events` | Append-only event log per ticket, carrying `org_id` for simple RLS and event-list queries. Lightweight audit trail. v1 captures: `received`, `triaged`, `deduplicated`, `pushed_to_linear`, `status_changed`, `email_sent`, `failed`. |
 | `dedup_signatures` | Deterministic-hash index for dedup. One row per `(org_id, normalized_signature)` with a reference back to the canonical ticket. |
 
-Embeddings for vector dedup live as a `pgvector` column on `tickets` (`description_embedding`), populated by a Feature, queried by the dedup Feature.
+Embeddings for vector dedup live as a `pgvector` column on `tickets` (`description_embedding`), populated by a Feature, queried by the dedup Feature. Phase 1 creates this as an unconstrained `vector`; Phase 3 locks dimension-specific indexing after the embedding model decision resolves.
 
 ### RLS posture in v1
 
@@ -201,9 +201,9 @@ Every incoming submission, regardless of source, is normalized into a single int
 
 Steps 3 through 7 run inline in v1 (no separate worker tier). The create-ticket endpoint returns after inline processing completes, with the current ticket state. If any step fails, the ticket is left in a recoverable state with status reflecting the failure point, and a manual retry endpoint is exposed (the existing `retryTicketTriage` flow generalized). If this later moves to background execution, the API contract should switch deliberately to 202 Accepted.
 
-### Priority matrix (DRAFT, requires validation)
+### Priority matrix
 
-`type` and `severity` are produced by the LLM. `priority` is computed by lookup.
+Locked 2026-05-13 (`BL-001`). `type` and `severity` are produced by the LLM. `priority` is computed by lookup.
 
 | severity \ type | bug | feature | improvement | question | incident |
 |---|---|---|---|---|---|
@@ -216,12 +216,16 @@ Notes:
 
 - `P1` = Critical, `P2` = High, `P3` = Medium, `P4` = Low.
 - Cells like `blocker x feature` are rare but the matrix is total to avoid `null` outputs.
-- This table is intended to land in code as `services/features/triage/priorityMatrix.ts`. Validation happens before that lands.
+- This table lands in code as `services/features/triage/priorityMatrix.ts` in Phase 2.
 
-### Enums (DRAFT, requires validation)
+### Enums
+
+Locked 2026-05-13 (`BL-002`).
 
 - `type`: `bug | feature | improvement | question | incident`
 - `severity`: `blocker | major | minor | trivial`
+
+Both are encoded as Postgres `CREATE TYPE` enums in Phase 1. Adding a value later is a single `ALTER TYPE`; renaming or removing one requires a more careful migration, so any future change to either enum is a deliberate decision.
 
 ### LLM provider in v1
 
@@ -353,7 +357,7 @@ Hooks where the larger v1.1 design or AIP-side coupling could later slot in with
 Items deferred during the scoping pass on 2026-05-12. Each is a small, scoped decision that does not block v1 work as a whole.
 
 1. **Service-to-server caller auth mechanism for in-app submissions** (HMAC, OAuth client credentials, signed JWT, etc.).
-2. **Role model on `users`** (admin, submitter, read-only, etc.).
+2. ~~**Role model on `users`**~~ — **Resolved 2026-05-13:** no role column in v1; additive future migration if/when needed.
 3. **AIP monitoring webhook contract** (payload shape, auth, retry semantics).
 4. **Dedup action on hit** (reject, link, merge).
 5. **Dedup window** (forever, 30d, 90d, per-org configurable).
@@ -363,8 +367,8 @@ Items deferred during the scoping pass on 2026-05-12. Each is a small, scoped de
 9. **Email status-change transition subset** (which Linear states trigger a customer email).
 10. **Monitoring backend** (Logfire, Sentry, App Insights, none for v1).
 11. **Hosting service finalization on Azure** (Container Apps assumed; not locked).
-12. **Priority matrix validation** (the draft above is unvalidated against real triage decisions).
-13. **Type and severity enum validation** (proposed values are unvalidated against ATD's actual labelling practice).
+12. ~~**Priority matrix validation**~~ — **Resolved 2026-05-13:** draft matrix approved as-is (see Priority matrix section above).
+13. ~~**Type and severity enum validation**~~ — **Resolved 2026-05-13:** both enums approved as-drafted (see Enums section above).
 14. **`docs/requirements/legacy/` retention policy** (keep indefinitely vs. archive after one quarter).
 15. **AGENTS.md multi-agent skill sync** (only relevant if Codex or Antigravity are used here too).
 
