@@ -24,7 +24,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 ## 0. Master Progress Checklist
 
 - [x] **Phase 0** — Foundation Hygiene
-- [ ] **Phase 1** — Org/User Schema, Enums, RLS
+- [x] **Phase 1** — Org/User Schema, Enums, RLS
 - [ ] **Phase 2** — Triage Pipeline Refactor
 - [ ] **Phase 3** — Deduplication (deterministic + vector)
 - [ ] **Phase 4** — Linear Outbound (push)
@@ -110,27 +110,27 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Author migration: `YYYY-MM-DD_create_orgs_table.sql` (id, name, status, timestamps, soft-delete).
-- [ ] Author migration: `YYYY-MM-DD_create_users_table.sql` (id, `org_id` FK, email, display_name, timestamps, soft-delete, case-insensitive unique index on `(org_id, lower(email))`). **No role column in v1 per `BL-003`; additive migration when/if roles are introduced.**
-- [ ] Author migration: `YYYY-MM-DD_create_tickets_table.sql` (id, `org_id` FK, `user_id` FK, `source_kind`, raw subject/description, `type` (enum), `severity` (enum), derived/persisted `priority`, `status`, `dedup_signature`, `duplicate_of` same-org self-FK, `linear_issue_id`, `description_embedding vector` without dimension/index until Phase 3, timestamps, soft-delete). Created fresh from the v1 column set; no legacy `priority`/`category` columns exist.
-- [ ] Author migration: `YYYY-MM-DD_create_ticket_events_table.sql` (id, `org_id`, `ticket_id`, `event_type` enum, payload jsonb, created_at).
-- [ ] Author migration: `YYYY-MM-DD_create_dedup_signatures_table.sql` (id, `org_id`, `normalized_signature`, `canonical_ticket_id`, created_at, unique on `(org_id, normalized_signature)`, same-org constraint between signature and canonical ticket).
-- [ ] Author migration: `YYYY-MM-DD_enable_rls_and_policies.sql` (enable RLS on every org-scoped table; add per-table SELECT/INSERT/UPDATE policies keyed on `auth.jwt() ->> 'org_id'`).
-- [ ] Apply all migrations to local Supabase project.
-- [ ] Regenerate Supabase types via `pnpm gen-types`.
-- [ ] Update `tickets` Provider methods so every query carries explicit `org_id` and `user_id` predicates (service-role bypasses RLS; explicit scoping is mandatory).
-- [ ] Update the create-ticket API to accept `org_id` and `user_id` from the caller (trust-on-assertion for now; cryptographic verification arrives in Phase 7).
-- [ ] Add `ticket_events.received` emission on every successful insert.
-- [ ] Replace legacy `priority`/`category` Zod schemas with new `type`/`severity` schemas. Add `priorityMatrix.ts` skeleton (no logic yet — populated in Phase 2).
-- [ ] Tests: Feature-layer tests for org-scoped reads/writes covering the org-mismatch case (cross-org read must return empty).
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Author migration: `2026-05-13_03_create_orgs_table.sql` (id, name, status, timestamps, soft-delete).
+- [x] Author migration: `2026-05-13_04_create_users_table.sql` (id, `org_id` FK, email, display_name, timestamps, soft-delete, case-insensitive unique index on `(org_id, lower(email))`). **No role column in v1 per `BL-003`; additive migration when/if roles are introduced.**
+- [x] Author migration: `2026-05-13_05_create_tickets_table.sql` (id, `org_id` FK, `user_id` FK, `source_kind`, raw subject/description, `type` (enum), `severity` (enum), derived/persisted `priority`, `status`, `dedup_signature`, `duplicate_of` same-org self-FK, `linear_issue_id`, `description_embedding vector` without dimension/index until Phase 3, timestamps, soft-delete). Created fresh from the v1 column set; no legacy `priority`/`category` columns exist.
+- [x] Author migration: `2026-05-13_06_create_ticket_events_table.sql` (id, `org_id`, `ticket_id`, `event_type` enum, payload jsonb, created_at).
+- [x] Author migration: `2026-05-13_07_create_dedup_signatures_table.sql` (id, `org_id`, `normalized_signature`, `canonical_ticket_id`, created_at, unique on `(org_id, normalized_signature)`, same-org constraint between signature and canonical ticket).
+- [x] Author migration: `2026-05-13_08_enable_rls_and_policies.sql` (enable RLS on every org-scoped table; add per-table SELECT/INSERT/UPDATE policies keyed on `auth.jwt() ->> 'org_id'`; `authenticated` role grants for future user-JWT paths).
+- [x] Apply all migrations to local Supabase project.
+- [x] Regenerate Supabase types via `pnpm gen-types`.
+- [x] Update `tickets` Provider methods so every query carries explicit `org_id` and `user_id` predicates (service-role bypasses RLS; explicit scoping is mandatory).
+- [x] Update the create-ticket API to accept `org_id` and `user_id` from the caller (trust-on-assertion for now; cryptographic verification arrives in Phase 7).
+- [x] Add `ticket_events.received` emission on every successful insert.
+- [x] Replace legacy `priority`/`category` Zod schemas with new `type`/`severity` schemas. Add `priorityMatrix.ts` (matrix is locked data per `BL-001`; orchestrator wiring lands in Phase 2).
+- [x] Tests: Feature-layer tests for org-scoped reads/writes covering the org-mismatch case (cross-org read must return empty); Provider-domain tests for `orgs`/`users` cover org-scoping at the query level.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
 - New schema lives under `migrations/` and is applied cleanly locally.
 - RLS is enabled on every org-scoped table.
 - `tickets` Provider methods require trusted context and apply scoping in every query.
-- The create-ticket endpoint accepts `org_id` + `user_id` and persists them.
+- The create-ticket endpoint accepts API `orgId` + `userId` fields and persists them as `org_id` + `user_id`.
 - Cross-org reads are demonstrably blocked in tests.
 
 ---
@@ -141,9 +141,9 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Prerequisites:**
 
-- [ ] Phase 1 complete.
-- [ ] `BL-001` (priority matrix) resolved.
-- [ ] `BL-002` (enums) resolved.
+- [x] Phase 1 complete.
+- [x] `BL-001` (priority matrix) resolved.
+- [x] `BL-002` (enums) resolved.
 
 **Execution checklist:**
 

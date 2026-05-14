@@ -112,7 +112,7 @@ Three layers. Strict one-way dependency direction.
 
 ## Current Implementation Gap Snapshot
 
-Last reviewed on 2026-05-13. These are implementation gaps against this document, not alternate scope.
+Last reviewed on 2026-05-14. These are implementation gaps against this document, not alternate scope.
 
 Closed by Phase 0 (AIR-190):
 
@@ -120,10 +120,15 @@ Closed by Phase 0 (AIR-190):
 - ~~Existing integration adapters under `services/sources/`.~~ Resolved: renamed to `services/providers/`.
 - ~~No `.env.local.example`.~~ Resolved: template exists at the repo root and lists every key in `AGENTS.md` §10.
 
+Closed by Phase 1 (AIR-194):
+
+- ~~No DB schema exists yet.~~ Resolved: 8 production migrations + 1 dev seed applied to a fresh Supabase project. `orgs`, `users`, `tickets`, `ticket_events`, `dedup_signatures` all exist with composite-FK org consistency and RLS forced on every org-scoped table.
+- ~~The current Provider/Feature/route code still references legacy triage shapes.~~ Resolved: Provider domain types, Zod schemas, route handlers, client types, and UI components all use the v1 model (`type`, `severity`, derived `priority` P1–P4, `status`). The legacy LLM Provider was deleted; Phase 2 rebuilds it with the v1 output schema.
+
 Open (gated by later phases):
 
-- **No DB schema exists yet.** The forked-project migration from 2026-02-05 has been deleted; it described a single-table shape that was never applied for this project and is no longer relevant. Phase 1 lands the v1 schema fresh: `orgs`, `users`, `tickets` (with `org_id`, `user_id`, new enums, derived `priority`, embedding column), `ticket_events`, `dedup_signatures`, plus RLS on every org-scoped table.
-- The current Provider/Feature/route code still references legacy triage shapes (`priority: 'Critical' | 'High' | …`, `category: 'Billing' | …`). Phase 1 rewrites the Provider domain types and Zod schemas to the v1 model; Phase 2 wires the deterministic priority matrix.
+- **Triage pipeline is not wired.** Phase 1 tickets persist with `status='received'` and every triage field null. Phase 2 lands the triage Feature, populates `type`/`severity`/`priority`/`customer_facing_summary`/`suggested_reply`, and replaces the no-op `retryTicketTriageFeature` stub with a real retry.
+- **Caller identity is trusted-on-assertion.** The route handlers accept `orgId`/`userId` from request bodies / query strings with no cryptographic verification. Phase 7 (`BL-012`) replaces the `NEXT_PUBLIC_DEV_*` dev defaults with HMAC-signed caller identification, adds org-existence and user-org-membership checks at the Feature boundary.
 
 ## Data Layer
 

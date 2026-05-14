@@ -20,6 +20,7 @@ vi.mock('next/server', () => ({
 
 const ORG_A = '00000000-0000-0000-0000-0000000000a0';
 const USER_A = '00000000-0000-0000-0000-0000000000a1';
+const TICKET_ID = '00000000-0000-0000-0000-0000000000c1';
 
 describe('POST /api/tickets/[id]/retry-triage', () => {
   const retryMock = retryTicketTriageFeature as unknown as MockedFunction<typeof retryTicketTriageFeature>;
@@ -35,28 +36,56 @@ describe('POST /api/tickets/[id]/retry-triage', () => {
     consoleErrorSpy = null;
   });
 
-  function callRoute(id: string) {
-    return POST({} as Request, { params: Promise.resolve({ id }) }) as Promise<{
+  function callRoute(
+    id: string,
+    body: unknown = { orgId: ORG_A },
+    bodyKind: 'json' | 'invalid' = 'json',
+  ) {
+    const request = {
+      json: bodyKind === 'invalid' ? () => Promise.reject(new Error('SyntaxError')) : async () => body,
+    } as Request;
+    return POST(request, { params: Promise.resolve({ id }) }) as Promise<{
       json: () => Promise<unknown>;
       status: number;
     }>;
   }
 
   it('returns 200 with the ticket unchanged (Phase 1 stub)', async () => {
-    const ticket = makeTicketRow({ id: '00000000-0000-0000-0000-0000000000c1', status: 'received' });
+    const ticket = makeTicketRow({ id: TICKET_ID, status: 'received' });
     retryMock.mockResolvedValue({ success: true, data: ticket });
 
-    const response = await callRoute('00000000-0000-0000-0000-0000000000c1');
+    const response = await callRoute(TICKET_ID);
     const json = (await response.json()) as { ticket: { id: string; status: string } };
 
-    expect(retryMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '00000000-0000-0000-0000-0000000000c1' });
+    expect(retryMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: TICKET_ID });
     expect(response.status).toBe(200);
-    expect(json.ticket.id).toBe('00000000-0000-0000-0000-0000000000c1');
+    expect(json.ticket.id).toBe(TICKET_ID);
     expect(json.ticket.status).toBe('received');
   });
 
   it('returns 400 when no ticket id is supplied', async () => {
     const response = await callRoute('');
+    expect(response.status).toBe(400);
+    expect(retryMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 for invalid JSON body', async () => {
+    const response = await callRoute(TICKET_ID, undefined, 'invalid');
+    expect(response.status).toBe(400);
+    expect(retryMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when body is not a JSON object', async () => {
+    const response = await callRoute(TICKET_ID, [ORG_A]);
+    expect(response.status).toBe(400);
+    expect(retryMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['orgId missing', {}],
+    ['orgId not a UUID', { orgId: 'not-a-uuid' }],
+  ])('returns 400 when %s', async (_label, body) => {
+    const response = await callRoute(TICKET_ID, body);
     expect(response.status).toBe(400);
     expect(retryMock).not.toHaveBeenCalled();
   });
@@ -67,8 +96,18 @@ describe('POST /api/tickets/[id]/retry-triage', () => {
       error: { code: 'TICKET_NOT_FOUND', message: 'Not found.' },
     });
 
-    const response = await callRoute('00000000-0000-0000-0000-0000000000c1');
+    const response = await callRoute(TICKET_ID);
     expect(response.status).toBe(404);
+  });
+
+  it('returns 400 when the Feature reports VALIDATION_ERROR', async () => {
+    retryMock.mockResolvedValue({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Bad input.' },
+    });
+
+    const response = await callRoute(TICKET_ID);
+    expect(response.status).toBe(400);
   });
 
   it('returns 500 on other Feature errors', async () => {
@@ -77,7 +116,7 @@ describe('POST /api/tickets/[id]/retry-triage', () => {
       error: { code: 'TICKET_FETCH_FAILED', message: 'DB down.' },
     });
 
-    const response = await callRoute('00000000-0000-0000-0000-0000000000c1');
+    const response = await callRoute(TICKET_ID);
     expect(response.status).toBe(500);
   });
 });

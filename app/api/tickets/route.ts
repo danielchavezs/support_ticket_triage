@@ -4,23 +4,22 @@ import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 export const runtime = 'nodejs';
 
-// PR 2 dev defaults — these match the UUIDs seeded by
-// `migrations/dev/2026-05-13_seed_dev_default.sql`. The internal-only
-// dashboard and the existing client code don't yet send `orgId` / `userId`
-// in their requests; the route hardcodes them here so the Provider/Feature
-// rewrite stays decoupled from the request-body change.
-//
-// TODO(Stage P1.5 / PR 3): replace these with `process.env.DEV_DEFAULT_ORG_ID`
-// (and the user equivalent) read at module init, AND require `orgId`/`userId`
-// from the request body via the cryptographic caller-auth path (Phase 7
-// hardens this with HMAC verification per BL-012).
-const DEV_DEFAULT_ORG_ID = '00000000-0000-0000-0000-0000000000a0';
-const DEV_DEFAULT_USER_ID = '00000000-0000-0000-0000-0000000000a1';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function GET() {
-  const result = await listTicketsFeature({ orgId: DEV_DEFAULT_ORG_ID });
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const orgId = url.searchParams.get('orgId');
+  if (!orgId || !UUID_PATTERN.test(orgId)) {
+    return NextResponse.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'Query parameter `orgId` is required and must be a UUID.' } },
+      { status: 400 },
+    );
+  }
+
+  const result = await listTicketsFeature({ orgId });
   if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 500 });
+    const status = result.error.code === 'VALIDATION_ERROR' ? 400 : 500;
+    return NextResponse.json({ error: result.error }, { status });
   }
 
   return NextResponse.json({ tickets: result.data.map(toTicketDto) });
@@ -49,13 +48,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
-  const result = await createTicketFeature({
-    orgId: DEV_DEFAULT_ORG_ID,
-    userId: DEV_DEFAULT_USER_ID,
-    subject: parsed.data.subject,
-    description: parsed.data.description,
-  });
-
+  const result = await createTicketFeature(parsed.data);
   if (!result.success) {
     const status = result.error.code === 'VALIDATION_ERROR' ? 400 : 500;
     return NextResponse.json({ error: result.error }, { status });
@@ -69,21 +62,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Parse the legacy-shape request body. The form still sends `customerName`
- * and `email`; both are accepted but ignored in PR 2 because the new schema
- * stores those on `users`, not `tickets`. PR 3 (Stage P1.5) revisits the
- * request shape with `orgId` / `userId` instead of `customerName` / `email`.
+ * Parse the v1 request body: `{ orgId, userId, subject, description }`.
+ * Cryptographic verification of the asserted `orgId`/`userId` arrives in
+ * Phase 7 (BL-012); v1 trusts the caller and only enforces shape.
  */
 function parseTicketBody(value: Record<string, unknown>):
-  | { success: true; data: { subject: string; description: string } }
+  | { success: true; data: { orgId: string; userId: string; subject: string; description: string } }
   | { success: false; error: { code: string; message: string } } {
+  const orgId = typeof value.orgId === 'string' ? value.orgId : '';
+  const userId = typeof value.userId === 'string' ? value.userId : '';
   const subject = typeof value.subject === 'string' ? value.subject : '';
   const description = typeof value.description === 'string' ? value.description : '';
 
+  if (!UUID_PATTERN.test(orgId)) {
+    return { success: false, error: { code: 'VALIDATION_ERROR', message: '`orgId` is required and must be a UUID.' } };
+  }
+  if (!UUID_PATTERN.test(userId)) {
+    return { success: false, error: { code: 'VALIDATION_ERROR', message: '`userId` is required and must be a UUID.' } };
+  }
   if (!subject.trim()) return { success: false, error: { code: 'VALIDATION_ERROR', message: 'Subject is required.' } };
   if (!description.trim()) return { success: false, error: { code: 'VALIDATION_ERROR', message: 'Description is required.' } };
 
-  return { success: true, data: { subject, description } };
+  return { success: true, data: { orgId, userId, subject, description } };
 }
 
 /**

@@ -38,16 +38,14 @@ export type Ticket = {
 };
 
 /**
- * Request payload for `POST /api/tickets`.
+ * Form-side payload for submitting a new ticket from the dashboard.
  *
- * `customerName` and `email` are accepted by the route in PR 2 but ignored —
- * the new schema stores submitter identity on the `users` table, not on
- * `tickets`. PR 3 reshapes this payload to `{ orgId, userId, subject,
- * description }` and removes the customerName / email fields.
+ * Just the free-text fields the user types. The client `createTicket`
+ * helper layers `orgId` and `userId` on top from the dev-default env vars
+ * before hitting the API. Phase 7 (caller auth) replaces those env reads
+ * with real cryptographic caller identification.
  */
 export type NewTicketPayload = {
-  customerName: string;
-  email: string;
   subject: string;
   description: string;
 };
