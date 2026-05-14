@@ -50,17 +50,45 @@ describe('POST /api/tickets/[id]/retry-triage', () => {
     }>;
   }
 
-  it('returns 200 with the ticket unchanged (Phase 1 stub)', async () => {
-    const ticket = makeTicketRow({ id: TICKET_ID, status: 'received' });
+  it('returns 200 with the Feature\'s ticket (no-op on already-triaged)', async () => {
+    const ticket = makeTicketRow({ id: TICKET_ID, status: 'triaged', confidence: 0.9 });
     retryMock.mockResolvedValue({ success: true, data: ticket });
 
     const response = await callRoute(TICKET_ID);
-    const json = (await response.json()) as { ticket: { id: string; status: string } };
+    const json = (await response.json()) as {
+      ticket: { id: string; status: string; needsHumanTriage: boolean };
+    };
 
     expect(retryMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: TICKET_ID });
     expect(response.status).toBe(200);
     expect(json.ticket.id).toBe(TICKET_ID);
-    expect(json.ticket.status).toBe('received');
+    expect(json.ticket.status).toBe('triaged');
+    expect(json.ticket.needsHumanTriage).toBe(false);
+  });
+
+  it('returns 200 with a re-triaged ticket after retry', async () => {
+    const triaged = makeTicketRow({ id: TICKET_ID, status: 'triaged', type: 'bug', priority: 'P2', confidence: 0.4 });
+    retryMock.mockResolvedValue({ success: true, data: triaged });
+
+    const response = await callRoute(TICKET_ID);
+    const json = (await response.json()) as {
+      ticket: { status: string; priority: string; needsHumanTriage: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(json.ticket.priority).toBe('P2');
+    // Confidence 0.4 < 0.70 threshold → flagged for human review.
+    expect(json.ticket.needsHumanTriage).toBe(true);
+  });
+
+  it('returns 500 when retry returns TRIAGE_FAILED', async () => {
+    retryMock.mockResolvedValue({
+      success: false,
+      error: { code: 'TRIAGE_FAILED', message: 'Gemini 503' },
+    });
+
+    const response = await callRoute(TICKET_ID);
+    expect(response.status).toBe(500);
   });
 
   it('returns 400 when no ticket id is supplied', async () => {

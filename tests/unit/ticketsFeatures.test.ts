@@ -8,6 +8,7 @@ import {
   retryTicketTriageFeature,
 } from '@/services/features/tickets/ticketsFeatures';
 import { server as sources } from '@/services/providers/supabase/server';
+import { triageTicketFeature } from '@/services/features/triage/triageTicket';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 vi.mock('@/services/providers/supabase/server', () => ({
@@ -27,6 +28,10 @@ vi.mock('@/services/providers/supabase/server', () => ({
   },
 }));
 
+vi.mock('@/services/features/triage/triageTicket', () => ({
+  triageTicketFeature: vi.fn(),
+}));
+
 const ORG_A = '00000000-0000-0000-0000-00000000000a';
 const ORG_B = '00000000-0000-0000-0000-00000000000b';
 const USER_A = '00000000-0000-0000-0000-0000000000a1';
@@ -36,6 +41,7 @@ describe('tickets feature', () => {
   const getByIdMock = sources.tickets.getById as unknown as MockedFunction<typeof sources.tickets.getById>;
   const createMock = sources.tickets.create as unknown as MockedFunction<typeof sources.tickets.create>;
   const eventCreateMock = sources.ticketEvents.create as unknown as MockedFunction<typeof sources.ticketEvents.create>;
+  const triageMock = triageTicketFeature as unknown as MockedFunction<typeof triageTicketFeature>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
@@ -97,8 +103,9 @@ describe('tickets feature', () => {
       description: 'I cannot log in to my account.',
     };
 
-    it('creates a ticket and emits ticket_events.received', async () => {
+    it('creates a ticket, emits received, and inline-invokes triage', async () => {
       const created = makeTicketRow({ id: '123', org_id: ORG_A, user_id: USER_A, subject: baseInput.subject });
+      const triaged = makeTicketRow({ id: '123', org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
       createMock.mockResolvedValue(created);
       eventCreateMock.mockResolvedValue({
         id: 'evt-1',
@@ -108,6 +115,7 @@ describe('tickets feature', () => {
         payload: {},
         created_at: new Date(0).toISOString(),
       });
+      triageMock.mockResolvedValue({ success: true, data: triaged });
 
       const result = await createTicketFeature(baseInput);
 
@@ -123,6 +131,62 @@ describe('tickets feature', () => {
         ticketId: '123',
         eventType: 'received',
       });
+      expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '123' });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(triaged);
+    });
+
+    it('returns the persisted failed ticket when triage fails (recoverable state)', async () => {
+      // Triage failures persist `status='failed'` + `triage_error` on the row.
+      // The Feature returns success: the ticket exists, retry is available.
+      const created = makeTicketRow({ id: '123', org_id: ORG_A });
+      const failed = makeTicketRow({
+        id: '123',
+        org_id: ORG_A,
+        status: 'failed',
+        triage_error: 'Gemini 503',
+      });
+      createMock.mockResolvedValue(created);
+      getByIdMock.mockResolvedValue(failed);
+      eventCreateMock.mockResolvedValue({
+        id: 'evt-1',
+        org_id: ORG_A,
+        ticket_id: '123',
+        event_type: 'received',
+        payload: {},
+        created_at: new Date(0).toISOString(),
+      });
+      triageMock.mockResolvedValue({
+        success: false,
+        error: { code: 'TRIAGE_FAILED', message: 'Gemini 503' },
+      });
+
+      const result = await createTicketFeature(baseInput);
+
+      expect(result.success).toBe(true);
+      expect(getByIdMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '123' });
+      if (result.success) expect(result.data).toEqual(failed);
+    });
+
+    it('falls back to the originally-created ticket if refetch after triage failure fails', async () => {
+      const created = makeTicketRow({ id: '123', org_id: ORG_A });
+      createMock.mockResolvedValue(created);
+      eventCreateMock.mockResolvedValue({
+        id: 'evt-1',
+        org_id: ORG_A,
+        ticket_id: '123',
+        event_type: 'received',
+        payload: {},
+        created_at: new Date(0).toISOString(),
+      });
+      triageMock.mockResolvedValue({
+        success: false,
+        error: { code: 'TRIAGE_FAILED', message: 'Gemini 503' },
+      });
+      getByIdMock.mockRejectedValue(new Error('DB still down'));
+
+      const result = await createTicketFeature(baseInput);
+
       expect(result.success).toBe(true);
       if (result.success) expect(result.data).toEqual(created);
     });
@@ -136,31 +200,34 @@ describe('tickets feature', () => {
       const result = await createTicketFeature({ ...baseInput, ...overrides });
 
       expect(createMock).not.toHaveBeenCalled();
+      expect(triageMock).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error.code).toBe('VALIDATION_ERROR');
     });
 
-    it('returns TICKET_CREATE_FAILED when the Provider create throws', async () => {
+    it('returns TICKET_CREATE_FAILED when the Provider create throws (no triage invoked)', async () => {
       createMock.mockRejectedValue(new Error('DB Error'));
 
       const result = await createTicketFeature(baseInput);
 
       expect(eventCreateMock).not.toHaveBeenCalled();
+      expect(triageMock).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error.code).toBe('TICKET_CREATE_FAILED');
     });
 
-    it('treats event emission failure as non-fatal', async () => {
-      // The ticket existing is the more important invariant. A failed event
-      // emission logs but the ticket is still returned to the caller.
+    it('treats event emission failure as non-fatal and still runs triage', async () => {
       const created = makeTicketRow({ id: '123', org_id: ORG_A });
+      const triaged = makeTicketRow({ id: '123', org_id: ORG_A, status: 'triaged' });
       createMock.mockResolvedValue(created);
       eventCreateMock.mockRejectedValue(new Error('events table down'));
+      triageMock.mockResolvedValue({ success: true, data: triaged });
 
       const result = await createTicketFeature(baseInput);
 
+      expect(triageMock).toHaveBeenCalled();
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(created);
+      if (result.success) expect(result.data).toEqual(triaged);
     });
 
     it('forwards an explicit sourceKind when provided', async () => {
@@ -174,6 +241,7 @@ describe('tickets feature', () => {
         payload: {},
         created_at: new Date(0).toISOString(),
       });
+      triageMock.mockResolvedValue({ success: true, data: created });
 
       await createTicketFeature({ ...baseInput, sourceKind: 'aip_monitoring' });
 
@@ -217,23 +285,67 @@ describe('tickets feature', () => {
   });
 
   describe('retryTicketTriageFeature', () => {
-    it('returns the ticket unchanged (Phase 1 no-op stub)', async () => {
-      const ticket = makeTicketRow({ id: '00000000-0000-0000-0000-0000000000c1', org_id: ORG_A, status: 'failed' });
-      getByIdMock.mockResolvedValue(ticket);
+    const ticketId = '00000000-0000-0000-0000-0000000000c1';
 
-      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId: '00000000-0000-0000-0000-0000000000c1' });
+    it('dispatches to triage when the ticket is in failed state', async () => {
+      const failed = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'failed', type: null });
+      const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
+      getByIdMock.mockResolvedValue(failed);
+      triageMock.mockResolvedValue({ success: true, data: triaged });
 
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(ticket);
+      if (result.success) expect(result.data).toEqual(triaged);
+    });
+
+    it('dispatches to triage when type is null (received but never classified)', async () => {
+      const received = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'received', type: null });
+      const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'feature' });
+      getByIdMock.mockResolvedValue(received);
+      triageMock.mockResolvedValue({ success: true, data: triaged });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(triageMock).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.status).toBe('triaged');
+    });
+
+    it('is a no-op for an already-triaged ticket', async () => {
+      const already = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
+      getByIdMock.mockResolvedValue(already);
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(triageMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(already);
     });
 
     it('returns TICKET_NOT_FOUND when the ticket does not exist', async () => {
       getByIdMock.mockResolvedValue(null);
 
-      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId: '00000000-0000-0000-0000-0000000000c1' });
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
 
+      expect(triageMock).not.toHaveBeenCalled();
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error.code).toBe('TICKET_NOT_FOUND');
+    });
+
+    it('propagates triage failure to the caller', async () => {
+      const failed = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'failed', type: null });
+      getByIdMock.mockResolvedValue(failed);
+      triageMock.mockResolvedValue({
+        success: false,
+        error: { code: 'TRIAGE_FAILED', message: 'Gemini 503' },
+      });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.code).toBe('TRIAGE_FAILED');
     });
   });
 });

@@ -1,5 +1,6 @@
 import { createTicketFeature, listTicketsFeature } from '@/services/features/tickets';
 import { NextResponse } from 'next/server';
+import { isLowConfidence } from '@/services/features/triage/confidence';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 export const runtime = 'nodejs';
@@ -87,8 +88,11 @@ function parseTicketBody(value: Record<string, unknown>):
 }
 
 /**
- * Map a v1 `TicketRow` to the camelCase DTO returned by the API. Triage
- * fields are present but null until Phase 2 wires the triage Feature.
+ * Map a v1 `TicketRow` to the camelCase DTO returned by the API.
+ *
+ * `needsHumanTriage` is derived at response time from `confidence` against
+ * the threshold in `services/features/triage/confidence.ts`. It is not a
+ * stored column — keeping the threshold tunable without a migration.
  */
 function toTicketDto(row: TicketRow) {
   return {
@@ -108,6 +112,7 @@ function toTicketDto(row: TicketRow) {
     suggestedReply: row.suggested_reply,
     status: row.status,
     triageError: row.triage_error,
+    needsHumanTriage: isLowConfidence(row.confidence),
     linearIssueId: row.linear_issue_id,
   };
 }

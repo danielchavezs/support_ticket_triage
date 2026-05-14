@@ -42,9 +42,12 @@ export type CreateTicketInput = {
 };
 
 export type TicketTriageUpdate = {
-  type: TicketType;
-  severity: TicketSeverity;
-  priority: TicketPriority;
+  // On the success path these are non-null; on the failure path they are
+  // cleared to null alongside `status='failed'` and a populated `triageError`.
+  // The DB columns are nullable to support both states.
+  type: TicketType | null;
+  severity: TicketSeverity | null;
+  priority: TicketPriority | null;
   confidence: number | null;
   customerFacingSummary: string | null;
   suggestedReply: string | null;

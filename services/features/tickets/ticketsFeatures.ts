@@ -1,11 +1,12 @@
 /**
  * Tickets Feature — business orchestration for ticket CRUD-ish operations.
  *
- * Phase 1 scope: create, list, get, and a no-op retry stub. The LLM-driven
- * triage call is deliberately absent in Phase 1; Phase 2's triage Feature
- * will own classification + customer reply drafting and update the row via
- * `tickets.updateTriage`. Tickets in Phase 1 persist with `status='received'`
- * and every triage field null.
+ * Phase 2 scope: create + list + get + state-aware retry. Triage itself
+ * lives in `services/features/triage/`; this Feature owns persistence and
+ * the `received` event, then hands off to `triageTicketFeature` inline
+ * after insert. If triage fails, the ticket still exists (recoverable
+ * `status='failed'` state) and is returned to the caller; the retry
+ * endpoint can resume it.
  *
  * Org-scoping invariant: every entry point requires `orgId` (and where
  * applicable `userId`). The Feature relies on the Provider to apply the
@@ -26,6 +27,7 @@ import {
   TicketScopedInputSchema,
   type NewTicketInput,
 } from '@/services/features/tickets/schemas';
+import { triageTicketFeature } from '@/services/features/triage/triageTicket';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 export type { NewTicketInput } from '@/services/features/tickets/schemas';
@@ -77,6 +79,20 @@ export async function createTicketFeature(input: NewTicketInput): Promise<Featur
     console.error('ticket_events.received emission failed (non-fatal):', err);
   }
 
+  // Inline triage (steps 3–5 of the architecture pipeline). A failure here
+  // leaves the ticket with `status='failed'` and `triage_error` set — the
+  // ticket itself is still created successfully, so the API returns 201.
+  // The retry endpoint can resume the failed ticket later.
+  const triage = await triageTicketFeature({ orgId: created.org_id, ticketId: created.id });
+  if (triage.success) return ok(triage.data);
+
+  try {
+    const current = await sources.tickets.getById({ orgId: created.org_id, ticketId: created.id });
+    if (current) return ok(current);
+  } catch (err) {
+    console.error('ticket fetch after triage failure failed (non-fatal):', err);
+  }
+
   return ok(created);
 }
 
@@ -102,20 +118,29 @@ export async function getTicketFeature(input: {
 }
 
 /**
- * Retry triage stub.
+ * State-aware retry dispatcher.
  *
- * Phase 1 has no triage logic — Phase 2 wires this up to invoke the triage
- * Feature. For now, this confirms the ticket exists (org-scoped) and returns
- * it unchanged with a 200-equivalent. Callers see a non-error response so
- * the existing UI's retry button continues to behave non-disastrously,
- * even though it has no useful effect yet.
+ * Phase 2 only knows about the triage stage. If the ticket is still
+ * un-classified (`type IS NULL`) or in `status='failed'`, re-run triage.
+ * Otherwise treat retry as an idempotent no-op and return the ticket.
  *
- * TODO(Phase 2): replace the no-op with a call to
- * `services/features/triage/runTriage` (or equivalent entry point).
+ * Phase 3+ will extend this dispatch table — e.g. dedup re-run when the
+ * ticket reached `duplicate` state with a stale signature, Linear push
+ * re-run when `linear_issue_id IS NULL` after a triaged ticket. The
+ * function lives in the `tickets` Feature because retry is a
+ * tickets-scoped recovery action, not a triage-internal concern.
  */
 export async function retryTicketTriageFeature(input: {
   orgId: string;
   ticketId: string;
 }): Promise<FeatureResult<TicketRow>> {
-  return getTicketFeature(input);
+  const fetched = await getTicketFeature(input);
+  if (!fetched.success) return fetched;
+
+  const ticket = fetched.data;
+  if (ticket.type == null || ticket.status === 'failed') {
+    return triageTicketFeature({ orgId: ticket.org_id, ticketId: ticket.id });
+  }
+
+  return ok(ticket);
 }

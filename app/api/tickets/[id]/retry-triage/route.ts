@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { retryTicketTriageFeature } from '@/services/features/tickets';
+import { isLowConfidence } from '@/services/features/triage/confidence';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 export const runtime = 'nodejs';
@@ -81,6 +82,7 @@ function toTicketDto(row: TicketRow) {
     suggestedReply: row.suggested_reply,
     status: row.status,
     triageError: row.triage_error,
+    needsHumanTriage: isLowConfidence(row.confidence),
     linearIssueId: row.linear_issue_id,
   };
 }

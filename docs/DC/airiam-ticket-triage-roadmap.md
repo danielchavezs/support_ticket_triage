@@ -25,7 +25,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 
 - [x] **Phase 0** — Foundation Hygiene
 - [x] **Phase 1** — Org/User Schema, Enums, RLS
-- [ ] **Phase 2** — Triage Pipeline Refactor
+- [x] **Phase 2** — Triage Pipeline Refactor
 - [ ] **Phase 3** — Deduplication (deterministic + vector)
 - [ ] **Phase 4** — Linear Outbound (push)
 - [ ] **Phase 5** — Linear Inbound Webhook
@@ -147,15 +147,15 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Create `services/features/triage/` with: `index.ts` (entry point), `triageTicket.ts` (orchestrator), `priorityMatrix.ts` (table lookup), `schemas.ts` (Zod output schema), `confidence.ts` (threshold logic).
-- [ ] Move triage orchestration out of `services/features/tickets/ticketsFeatures.ts` into the new `triage` Feature. `tickets` Feature retains persistence; `triage` returns a classified result.
-- [ ] Replace the legacy `priority` + `category` LLM output schema with the new `{ type, severity, customer_facing_summary, suggested_reply, confidence }` schema. Validate with Zod.
-- [ ] Implement `priorityMatrix[severity][type]` lookup as a pure function. No fallthrough; matrix is total.
-- [ ] Implement confidence-threshold flagging: below-threshold results return a `needs_human_triage: true` indicator on the ticket.
-- [ ] Emit `ticket_events.triaged` on success and `ticket_events.failed` on LLM error.
-- [ ] Generalize the existing `retryTicketTriage` endpoint so it can resume from any failed step (not just LLM).
-- [ ] Tests: LLM happy path, schema validation rejection, retry path, below-confidence flagging, matrix lookup completeness.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Create `services/features/triage/` with: `index.ts` (entry point), `triageTicket.ts` (orchestrator), `priorityMatrix.ts` (table lookup), `schemas.ts` (Zod output schema), `confidence.ts` (threshold logic).
+- [x] Move triage orchestration out of `services/features/tickets/ticketsFeatures.ts` into the new `triage` Feature. `tickets` Feature retains persistence; `triage` returns a classified result.
+- [x] Replace the legacy `priority` + `category` LLM output schema with the new `{ type, severity, customer_facing_summary, suggested_reply, confidence }` schema. Validate with Zod.
+- [x] Implement `priorityMatrix[severity][type]` lookup as a pure function. No fallthrough; matrix is total.
+- [x] Implement confidence-threshold flagging: below-threshold results return a `needs_human_triage: true` indicator on the ticket. *(Derived in API DTO as `needsHumanTriage` from `confidence < 0.70`; threshold lives in `services/features/triage/confidence.ts`.)*
+- [x] Emit `ticket_events.triaged` on success and `ticket_events.failed` on LLM error.
+- [x] Generalize the existing `retryTicketTriage` endpoint so it can resume from any failed step (not just LLM). *(State-aware dispatcher: re-runs triage when `type IS NULL` or `status='failed'`; idempotent no-op when already triaged. Future phases extend the dispatch table.)*
+- [x] Tests: LLM happy path, schema validation rejection, retry path, below-confidence flagging, matrix lookup completeness.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
