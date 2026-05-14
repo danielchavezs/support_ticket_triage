@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "gen-types": "supabase gen types typescript --project-id \"byfqtbzdxpoxfjtwojbz\" --schema public > assets/databaseTypes.ts",
+    "gen-types": "supabase gen types typescript --project-id \"mhpbpiuuttstzacqtsse\" --schema public > assets/databaseTypes.ts",
     "test": "vitest --run",
     "test:watch": "vitest"
   },

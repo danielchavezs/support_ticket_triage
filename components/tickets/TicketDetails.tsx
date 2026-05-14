@@ -32,12 +32,10 @@ export default function TicketDetails(props: {
         <div className="min-w-0">
           <TicketBadges
             priority={props.ticket.priority}
-            category={props.ticket.category}
-            triageStatus={props.ticket.triageStatus}
+            status={props.ticket.status}
+            type={props.ticket.type}
           />
-          <div className="mt-2 truncate text-sm font-medium text-zinc-900">
-            {props.ticket.customerName} — {props.ticket.subject}
-          </div>
+          <div className="mt-2 truncate text-sm font-medium text-zinc-900">{props.ticket.subject}</div>
           <div className="mt-1 text-xs text-zinc-500">{new Date(props.ticket.createdAt).toLocaleString()}</div>
         </div>
         <span className="mt-1 text-zinc-400 transition group-open:rotate-180">▾</span>
@@ -48,16 +46,21 @@ export default function TicketDetails(props: {
           <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Description</div>
           <p className="mt-1 whitespace-pre-wrap text-zinc-800">{props.ticket.description}</p>
         </div>
-        <div>
-          <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Suggested response</div>
-          <p className="mt-1 whitespace-pre-wrap text-zinc-800">{props.ticket.suggestedResponse}</p>
-        </div>
-        <div className="text-xs text-zinc-500">
-          Contact: {props.ticket.email}
-          {props.ticket.triageError ? ` • Triage error: ${props.ticket.triageError}` : null}
-        </div>
+        {props.ticket.suggestedReply ? (
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Suggested reply</div>
+            <p className="mt-1 whitespace-pre-wrap text-zinc-800">{props.ticket.suggestedReply}</p>
+          </div>
+        ) : (
+          <div className="rounded-md bg-zinc-50 px-3 py-2 text-xs italic text-zinc-500">
+            Suggested reply pending.
+          </div>
+        )}
+        {props.ticket.triageError ? (
+          <div className="text-xs text-zinc-500">Triage error: {props.ticket.triageError}</div>
+        ) : null}
 
-        {props.ticket.triageStatus === 'failed' && (
+        {props.ticket.status === 'failed' && (
           <div className="flex flex-col gap-2 border-t border-zinc-100 pt-3">
             <button
               onClick={handleRetry}
@@ -84,4 +87,3 @@ export default function TicketDetails(props: {
     </details>
   );
 }
-
