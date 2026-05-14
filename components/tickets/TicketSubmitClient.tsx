@@ -45,7 +45,7 @@ export default function TicketSubmitClient() {
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
       <h2 className="text-lg font-semibold">Ticket submission</h2>
-      <p className="mt-1 text-sm text-zinc-600">All fields are required. Triage runs automatically on submit.</p>
+      <p className="mt-1 text-sm text-zinc-600">All fields are required. Tickets are saved for triage review.</p>
 
       <form
         className="mt-4 flex flex-col gap-3"
@@ -99,7 +99,7 @@ export default function TicketSubmitClient() {
           {submitting ? (
             <div className="flex items-center gap-2.5 animate-in fade-in zoom-in-95 duration-200">
               <Loader size="sm" />
-              <span>Submitting… (running triage)</span>
+              <span>Submitting ticket…</span>
             </div>
           ) : (
             <span className="animate-in fade-in slide-in-from-bottom-2 duration-300">Submit ticket</span>

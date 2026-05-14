@@ -1,202 +1,110 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
-import { retryTicketTriageFeature } from '@/services/features/tickets/ticketsFeatures';
-import { server as sources } from '@/services/providers/supabase/server';
-import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/providers/llm/ticketTriage';
+
+import { POST } from '@/app/api/tickets/[id]/retry-triage/route';
+import { retryTicketTriageFeature } from '@/services/features/tickets';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
-vi.mock('@/services/providers/supabase/server', () => ({
-    server: {
-        tickets: {
-            getById: vi.fn(),
-            updateTriage: vi.fn(),
-        },
-    },
+vi.mock('@/services/features/tickets', () => ({
+  retryTicketTriageFeature: vi.fn(),
 }));
 
-vi.mock('@/services/providers/llm/ticketTriage', () => ({
-    classifyTicketWithLlm: vi.fn(),
-    draftCustomerReplyWithLlm: vi.fn(),
+vi.mock('next/server', () => ({
+  NextResponse: {
+    json: vi.fn((data, init) => ({
+      json: async () => data,
+      status: init?.status ?? 200,
+    })),
+  },
 }));
 
-describe('retryTicketTriageFeature', () => {
-    const getByIdMock = sources.tickets.getById as unknown as MockedFunction<typeof sources.tickets.getById>;
-    const updateTriageMock = sources.tickets.updateTriage as unknown as MockedFunction<
-        typeof sources.tickets.updateTriage
-    >;
-    const classifyMock = classifyTicketWithLlm as unknown as MockedFunction<typeof classifyTicketWithLlm>;
-    const draftMock = draftCustomerReplyWithLlm as unknown as MockedFunction<typeof draftCustomerReplyWithLlm>;
-    let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
+const ORG_A = '00000000-0000-0000-0000-0000000000a0';
+const USER_A = '00000000-0000-0000-0000-0000000000a1';
 
-    beforeEach(() => {
-        vi.clearAllMocks();
-        consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+describe('POST /api/tickets/[id]/retry-triage', () => {
+  const retryMock = retryTicketTriageFeature as unknown as MockedFunction<typeof retryTicketTriageFeature>;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy?.mockRestore();
+    consoleErrorSpy = null;
+  });
+
+  function callRoute(id: string) {
+    return POST({} as Request, { params: Promise.resolve({ id }) }) as Promise<{
+      json: () => Promise<unknown>;
+      status: number;
+    }>;
+  }
+
+  it('returns 200 with the ticket unchanged (Phase 1 stub)', async () => {
+    const ticket = makeTicketRow({ id: '00000000-0000-0000-0000-0000000000c1', status: 'received' });
+    retryMock.mockResolvedValue({ success: true, data: ticket });
+
+    const response = await callRoute('00000000-0000-0000-0000-0000000000c1');
+    const json = (await response.json()) as { ticket: { id: string; status: string } };
+
+    expect(retryMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '00000000-0000-0000-0000-0000000000c1' });
+    expect(response.status).toBe(200);
+    expect(json.ticket.id).toBe('00000000-0000-0000-0000-0000000000c1');
+    expect(json.ticket.status).toBe('received');
+  });
+
+  it('returns 400 when no ticket id is supplied', async () => {
+    const response = await callRoute('');
+    expect(response.status).toBe(400);
+    expect(retryMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the Feature reports TICKET_NOT_FOUND', async () => {
+    retryMock.mockResolvedValue({
+      success: false,
+      error: { code: 'TICKET_NOT_FOUND', message: 'Not found.' },
     });
 
-    afterEach(() => {
-        consoleErrorSpy?.mockRestore();
-        consoleErrorSpy = null;
+    const response = await callRoute('00000000-0000-0000-0000-0000000000c1');
+    expect(response.status).toBe(404);
+  });
+
+  it('returns 500 on other Feature errors', async () => {
+    retryMock.mockResolvedValue({
+      success: false,
+      error: { code: 'TICKET_FETCH_FAILED', message: 'DB down.' },
     });
 
-    const existingTicket: TicketRow = {
-        id: '123',
-        created_at: '2024-01-01',
-        customer_name: 'Jane Doe',
-        email: 'jane@example.com',
-        subject: 'Login issue',
-        description: 'Cannot log in',
-        priority: 'Low',
-        category: 'General',
-        suggested_response: 'Fallback response',
-        triage_status: 'failed',
-        triage_error: 'LLM_CLASSIFICATION_FAILED',
-    };
-
-    it('returns error when ticket is not found', async () => {
-        getByIdMock.mockResolvedValue(null);
-
-        const result = await retryTicketTriageFeature({ ticketId: '999' });
-
-        expect(result.success).toBe(false);
-        if (!result.success) {
-            expect(result.error.code).toBe('TICKET_NOT_FOUND');
-        }
-    });
-
-    it('returns error when ticket fetch fails', async () => {
-        getByIdMock.mockRejectedValue(new Error('DB Error'));
-
-        const result = await retryTicketTriageFeature({ ticketId: '123' });
-
-        expect(result.success).toBe(false);
-        if (!result.success) {
-            expect(result.error.code).toBe('TICKET_FETCH_FAILED');
-        }
-    });
-
-    it('successfully retries triage when LLM works', async () => {
-        getByIdMock.mockResolvedValue(existingTicket);
-        classifyMock.mockResolvedValue({ priority: 'High', category: 'Account' });
-        draftMock.mockResolvedValue({ customerMessage: 'Please reset your password.' });
-
-        const updatedTicket: TicketRow = {
-            ...existingTicket,
-            priority: 'High',
-            category: 'Account',
-            suggested_response: 'Please reset your password.',
-            triage_status: 'succeeded',
-            triage_error: null,
-        };
-        updateTriageMock.mockResolvedValue(updatedTicket);
-
-        const result = await retryTicketTriageFeature({ ticketId: '123' });
-
-        expect(classifyTicketWithLlm).toHaveBeenCalledWith({
-            subject: existingTicket.subject,
-            description: existingTicket.description,
-        });
-        expect(draftCustomerReplyWithLlm).toHaveBeenCalledWith({
-            priority: 'High',
-            category: 'Account',
-            subject: existingTicket.subject,
-        });
-        expect(updateTriageMock).toHaveBeenCalledWith('123', {
-            priority: 'High',
-            category: 'Account',
-            suggested_response: 'Please reset your password.',
-            triage_status: 'succeeded',
-            triage_error: null,
-        });
-        expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.triage_status).toBe('succeeded');
-        }
-    });
-
-    it('keeps existing values when classification fails on retry', async () => {
-        getByIdMock.mockResolvedValue(existingTicket);
-        classifyMock.mockRejectedValue(new Error('LLM Error'));
-        draftMock.mockResolvedValue({ customerMessage: 'New response' });
-
-        const updatedTicket: TicketRow = {
-            ...existingTicket,
-            suggested_response: 'New response',
-            triage_status: 'failed',
-            triage_error: 'LLM_CLASSIFICATION_FAILED',
-        };
-        updateTriageMock.mockResolvedValue(updatedTicket);
-
-        const result = await retryTicketTriageFeature({ ticketId: '123' });
-
-        expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.triage_status).toBe('failed');
-            expect(result.data.triage_error).toBe('LLM_CLASSIFICATION_FAILED');
-        }
-    });
-
-    it('keeps existing response when drafting fails on retry', async () => {
-        getByIdMock.mockResolvedValue(existingTicket);
-        classifyMock.mockResolvedValue({ priority: 'Medium', category: 'Technical' });
-        draftMock.mockRejectedValue(new Error('LLM Error'));
-
-        const updatedTicket: TicketRow = {
-            ...existingTicket,
-            priority: 'Medium',
-            category: 'Technical',
-            suggested_response: existingTicket.suggested_response,
-            triage_status: 'failed',
-            triage_error: 'LLM_RESPONSE_FAILED',
-        };
-        updateTriageMock.mockResolvedValue(updatedTicket);
-
-        const result = await retryTicketTriageFeature({ ticketId: '123' });
-
-        expect(result.success).toBe(true);
-        if (result.success) {
-            expect(result.data.triage_error).toBe('LLM_RESPONSE_FAILED');
-        }
-    });
-
-    it('falls back to the canned acknowledgement when retry has no prior suggested_response', async () => {
-        const ticketWithoutResponse = { ...existingTicket, suggested_response: null } as unknown as TicketRow;
-        getByIdMock.mockResolvedValue(ticketWithoutResponse);
-        classifyMock.mockResolvedValue({ priority: 'Medium', category: 'Technical' });
-        draftMock.mockRejectedValue(new Error('LLM Error'));
-
-        const updatedTicket: TicketRow = {
-            ...ticketWithoutResponse,
-            priority: 'Medium',
-            category: 'Technical',
-            suggested_response:
-                "Thanks for reaching out. We've received your request and our team will review it. If you can share any additional details, we'll be able to help faster.",
-            triage_status: 'failed',
-            triage_error: 'LLM_RESPONSE_FAILED',
-        };
-        updateTriageMock.mockResolvedValue(updatedTicket);
-
-        const result = await retryTicketTriageFeature({ ticketId: '123' });
-
-        expect(updateTriageMock).toHaveBeenCalledWith(
-            '123',
-            expect.objectContaining({
-                triage_error: 'LLM_RESPONSE_FAILED',
-            }),
-        );
-        expect(result.success).toBe(true);
-    });
-
-    it('returns error when update fails', async () => {
-        getByIdMock.mockResolvedValue(existingTicket);
-        classifyMock.mockResolvedValue({ priority: 'High', category: 'Account' });
-        draftMock.mockResolvedValue({ customerMessage: 'Response' });
-        updateTriageMock.mockRejectedValue(new Error('DB Error'));
-
-        const result = await retryTicketTriageFeature({ ticketId: '123' });
-
-        expect(result.success).toBe(false);
-        if (!result.success) {
-            expect(result.error.code).toBe('TICKET_UPDATE_FAILED');
-        }
-    });
+    const response = await callRoute('00000000-0000-0000-0000-0000000000c1');
+    expect(response.status).toBe(500);
+  });
 });
+
+function makeTicketRow(overrides: Partial<TicketRow> = {}): TicketRow {
+  return {
+    id: '00000000-0000-0000-0000-000000000000',
+    created_at: new Date(0).toISOString(),
+    updated_at: new Date(0).toISOString(),
+    deleted_at: null,
+    org_id: ORG_A,
+    user_id: USER_A,
+    source_kind: 'in_app',
+    subject: 'Subject',
+    description: 'Description',
+    type: null,
+    severity: null,
+    priority: null,
+    confidence: null,
+    customer_facing_summary: null,
+    suggested_reply: null,
+    status: 'received',
+    triage_error: null,
+    dedup_signature: null,
+    duplicate_of: null,
+    linear_issue_id: null,
+    description_embedding: null,
+    ...overrides,
+  };
+}

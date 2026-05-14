@@ -1,190 +1,121 @@
+/**
+ * Tickets Feature — business orchestration for ticket CRUD-ish operations.
+ *
+ * Phase 1 scope: create, list, get, and a no-op retry stub. The LLM-driven
+ * triage call is deliberately absent in Phase 1; Phase 2's triage Feature
+ * will own classification + customer reply drafting and update the row via
+ * `tickets.updateTriage`. Tickets in Phase 1 persist with `status='received'`
+ * and every triage field null.
+ *
+ * Org-scoping invariant: every entry point requires `orgId` (and where
+ * applicable `userId`). The Feature relies on the Provider to apply the
+ * `org_id` predicate to every query; this Feature does NOT silently fall
+ * back to a default org.
+ *
+ * Event emission: every successful insert emits `ticket_events.received`
+ * via the `ticketEvents` Provider. Emission failures log but do not roll
+ * back the ticket — the ticket existing is more important than the audit
+ * event being recorded.
+ */
+
 import { fail, ok, type FeatureResult } from '@/services/features/types';
 import { server as sources } from '@/services/providers/supabase/server';
-import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/providers/llm/ticketTriage';
-import { isValidEmail } from '@/services/features/tickets/validation';
-import type {
-  NewTicketRow,
-  TicketCategory,
-  TicketPriority,
-  TicketRow,
-} from '@/services/providers/supabase/domains/tickets';
+import {
+  NewTicketInputSchema,
+  OrgScopedInputSchema,
+  TicketScopedInputSchema,
+  type NewTicketInput,
+} from '@/services/features/tickets/schemas';
+import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
-export type NewTicketInput = {
-  customerName: string;
-  email: string;
-  subject: string;
-  description: string;
-};
+export type { NewTicketInput } from '@/services/features/tickets/schemas';
 
-export type TriageOutput = {
-  priority: TicketPriority;
-  category: TicketCategory;
-  suggestedResponse: string;
-};
+export async function listTicketsFeature(input: { orgId: string }): Promise<FeatureResult<TicketRow[]>> {
+  const parsed = OrgScopedInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input.');
+  }
 
-export async function listTicketsFeature(): Promise<FeatureResult<TicketRow[]>> {
   try {
-    const tickets = await sources.tickets.list();
+    const tickets = await sources.tickets.list({ orgId: parsed.data.orgId });
     return ok(tickets);
-  } catch {
+  } catch (err) {
+    console.error('Tickets list failed:', err);
     return fail('TICKETS_LIST_FAILED', 'Failed to fetch tickets.');
   }
 }
 
-export async function createTicketFeature(input: {
-  ticket: NewTicketInput;
-}): Promise<FeatureResult<TicketRow>> {
-  const validation = validateNewTicketInput(input.ticket);
-  if (!validation.success) return validation;
+export async function createTicketFeature(input: NewTicketInput): Promise<FeatureResult<TicketRow>> {
+  const parsed = NewTicketInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input.');
+  }
 
-  const ticket = {
-    customer_name: input.ticket.customerName.trim(),
-    email: input.ticket.email.trim(),
-    subject: input.ticket.subject.trim(),
-    description: input.ticket.description.trim(),
-  };
-
-  const triage = await performTriage({
-    subject: ticket.subject,
-    description: ticket.description,
-  });
-
-  const toInsert: NewTicketRow = {
-    ...ticket,
-    priority: triage.priority,
-    category: triage.category,
-    suggested_response: triage.suggestedResponse.trim(),
-    triage_status: triage.status,
-    triage_error: triage.error,
-  };
-
+  let created: TicketRow;
   try {
-    const created = await sources.tickets.create(toInsert);
-    return ok(created);
-  } catch (dbErr) {
-    console.error('Ticket create failed:', dbErr);
+    created = await sources.tickets.create({
+      orgId: parsed.data.orgId,
+      userId: parsed.data.userId,
+      subject: parsed.data.subject,
+      description: parsed.data.description,
+      sourceKind: parsed.data.sourceKind,
+    });
+  } catch (err) {
+    console.error('Ticket create failed:', err);
     return fail('TICKET_CREATE_FAILED', 'Failed to create ticket.');
   }
+
+  // Emit `received` event. Best-effort: a failed emission does not roll back
+  // the ticket because the ticket existing is the more important invariant.
+  try {
+    await sources.ticketEvents.create({
+      orgId: created.org_id,
+      ticketId: created.id,
+      eventType: 'received',
+    });
+  } catch (err) {
+    console.error('ticket_events.received emission failed (non-fatal):', err);
+  }
+
+  return ok(created);
 }
 
-function validateNewTicketInput(input: NewTicketInput): FeatureResult<never> | { success: true } {
-  const customerName = input.customerName?.trim();
-  const email = input.email?.trim();
-  const subject = input.subject?.trim();
-  const description = input.description?.trim();
-
-  if (!customerName) return fail('VALIDATION_ERROR', 'Customer name is required.');
-  if (!email) return fail('VALIDATION_ERROR', 'Email is required.');
-  if (!subject) return fail('VALIDATION_ERROR', 'Subject is required.');
-  if (!description) return fail('VALIDATION_ERROR', 'Description is required.');
-
-  if (!isValidEmail(email)) return fail('VALIDATION_ERROR', 'Email must be a valid email address.');
-
-  return { success: true };
-}
-
-export async function retryTicketTriageFeature(input: {
+export async function getTicketFeature(input: {
+  orgId: string;
   ticketId: string;
 }): Promise<FeatureResult<TicketRow>> {
-  let existingTicket: TicketRow | null;
+  const parsed = TicketScopedInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input.');
+  }
+
+  let ticket: TicketRow | null;
   try {
-    existingTicket = await sources.tickets.getById(input.ticketId);
+    ticket = await sources.tickets.getById({ orgId: parsed.data.orgId, ticketId: parsed.data.ticketId });
   } catch (err) {
-    console.error('Failed to fetch ticket for retry:', err);
+    console.error('Ticket fetch failed:', err);
     return fail('TICKET_FETCH_FAILED', 'Failed to fetch ticket.');
   }
 
-  if (!existingTicket) {
-    return fail('TICKET_NOT_FOUND', 'Ticket not found.');
-  }
-
-  const triage = await performTriage({
-    subject: existingTicket.subject,
-    description: existingTicket.description,
-    defaults: {
-      priority: existingTicket.priority as TicketPriority,
-      category: existingTicket.category as TicketCategory,
-      suggestedResponse: existingTicket.suggested_response ?? undefined,
-    },
-  });
-
-  try {
-    const updated = await sources.tickets.updateTriage(input.ticketId, {
-      priority: triage.priority,
-      category: triage.category,
-      suggested_response: triage.suggestedResponse.trim(),
-      triage_status: triage.status,
-      triage_error: triage.error,
-    });
-    return ok(updated);
-  } catch (dbErr) {
-    console.error('Ticket triage update failed:', dbErr);
-    return fail('TICKET_UPDATE_FAILED', 'Failed to update ticket triage.');
-  }
+  if (!ticket) return fail('TICKET_NOT_FOUND', 'Ticket not found.');
+  return ok(ticket);
 }
 
 /**
- * Shared helper to perform LLM triage (classification + drafting).
+ * Retry triage stub.
+ *
+ * Phase 1 has no triage logic — Phase 2 wires this up to invoke the triage
+ * Feature. For now, this confirms the ticket exists (org-scoped) and returns
+ * it unchanged with a 200-equivalent. Callers see a non-error response so
+ * the existing UI's retry button continues to behave non-disastrously,
+ * even though it has no useful effect yet.
+ *
+ * TODO(Phase 2): replace the no-op with a call to
+ * `services/features/triage/runTriage` (or equivalent entry point).
  */
-async function performTriage(input: {
-  subject: string;
-  description: string;
-  defaults?: {
-    priority: TicketPriority;
-    category: TicketCategory;
-    suggestedResponse?: string;
-  };
-}): Promise<TriageOutput & { status: 'succeeded' | 'failed'; error: string | null }> {
-  let classificationFailed = false;
-  let responseFailed = false;
-  let priority: TicketPriority = input.defaults?.priority ?? 'Low';
-  let category: TicketCategory = input.defaults?.category ?? 'General';
-  let suggestedResponse = '';
-
-  // 1. Classification
-  try {
-    const classification = await classifyTicketWithLlm({
-      subject: input.subject,
-      description: input.description,
-    });
-    priority = classification.priority;
-    category = classification.category;
-  } catch (err) {
-    console.error('LLM classification failed:', err);
-    classificationFailed = true;
-  }
-
-  // 2. Response Drafting
-  try {
-    const drafted = await draftCustomerReplyWithLlm({
-      priority,
-      category,
-      subject: input.subject,
-    });
-    suggestedResponse = drafted.customerMessage;
-  } catch (err) {
-    console.error('LLM customer reply drafting failed:', err);
-    responseFailed = true;
-    suggestedResponse =
-      input.defaults?.suggestedResponse ??
-      "Thanks for reaching out. We've received your request and our team will review it. If you can share any additional details, we'll be able to help faster.";
-  }
-
-  const triageFailed = classificationFailed || responseFailed;
-  const triageError =
-    classificationFailed && responseFailed
-      ? 'LLM_CLASSIFICATION_AND_RESPONSE_FAILED'
-      : classificationFailed
-        ? 'LLM_CLASSIFICATION_FAILED'
-        : responseFailed
-          ? 'LLM_RESPONSE_FAILED'
-          : null;
-
-  return {
-    priority,
-    category,
-    suggestedResponse,
-    status: triageFailed ? 'failed' : 'succeeded',
-    error: triageError,
-  };
+export async function retryTicketTriageFeature(input: {
+  orgId: string;
+  ticketId: string;
+}): Promise<FeatureResult<TicketRow>> {
+  return getTicketFeature(input);
 }
