@@ -34,6 +34,7 @@ export default function TicketDetails(props: {
             priority={props.ticket.priority}
             status={props.ticket.status}
             type={props.ticket.type}
+            dedupStatus={props.ticket.dedupStatus}
           />
           <div className="mt-2 truncate text-sm font-medium text-zinc-900">{props.ticket.subject}</div>
           <div className="mt-1 text-xs text-zinc-500">{new Date(props.ticket.createdAt).toLocaleString()}</div>
@@ -42,6 +43,12 @@ export default function TicketDetails(props: {
       </summary>
 
       <div className="mt-3 grid gap-3 text-sm">
+        {props.ticket.dedupStatus === 'duplicate' && props.ticket.duplicateOf ? (
+          <div className="rounded-md bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
+            <span className="font-medium">Duplicate of </span>
+            <code className="font-mono text-[11px]">{props.ticket.duplicateOf}</code>
+          </div>
+        ) : null}
         <div>
           <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Description</div>
           <p className="mt-1 whitespace-pre-wrap text-zinc-800">{props.ticket.description}</p>

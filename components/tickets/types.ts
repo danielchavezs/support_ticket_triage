@@ -17,6 +17,8 @@ export type TicketStatus =
   | 'closed';
 export type TicketSourceKind = 'in_app' | 'aip_monitoring';
 
+export type TicketDedupStatus = 'unique' | 'duplicate';
+
 export type Ticket = {
   id: string;
   createdAt: string;
@@ -35,6 +37,8 @@ export type Ticket = {
   status: TicketStatus;
   triageError: string | null;
   linearIssueId: string | null;
+  dedupStatus: TicketDedupStatus;
+  duplicateOf: string | null;
 };
 
 /**

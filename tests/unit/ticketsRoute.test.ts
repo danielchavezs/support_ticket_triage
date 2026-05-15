@@ -82,6 +82,46 @@ describe('Tickets API Route', () => {
       const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
       expect(response.status).toBe(500);
     });
+
+    it('surfaces dedupStatus=duplicate + duplicateOf for a confirmed duplicate row', async () => {
+      const canonicalId = '00000000-0000-0000-0000-0000000000c2';
+      const mockTickets: TicketRow[] = [
+        makeTicketRow({
+          id: 'aaa',
+          status: 'duplicate',
+          duplicate_of: canonicalId,
+          dedup_signature: 'sig-x',
+        }),
+      ];
+      listMock.mockResolvedValue({
+        success: true,
+        data: mockTickets,
+      } as Awaited<ReturnType<typeof listTicketsFeature>>);
+
+      const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
+      const json = (await response.json()) as {
+        tickets: Array<{ dedupStatus: string; duplicateOf: string | null }>;
+      };
+
+      expect(json.tickets[0].dedupStatus).toBe('duplicate');
+      expect(json.tickets[0].duplicateOf).toBe(canonicalId);
+    });
+
+    it('surfaces dedupStatus=unique + duplicateOf=null for a normal row', async () => {
+      const mockTickets: TicketRow[] = [makeTicketRow({ id: 'aaa', status: 'triaged' })];
+      listMock.mockResolvedValue({
+        success: true,
+        data: mockTickets,
+      } as Awaited<ReturnType<typeof listTicketsFeature>>);
+
+      const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
+      const json = (await response.json()) as {
+        tickets: Array<{ dedupStatus: string; duplicateOf: string | null }>;
+      };
+
+      expect(json.tickets[0].dedupStatus).toBe('unique');
+      expect(json.tickets[0].duplicateOf).toBeNull();
+    });
   });
 
   describe('POST', () => {
@@ -171,6 +211,30 @@ describe('Tickets API Route', () => {
 
       const response = (await POST(mockRequest)) as MockResponse;
       expect(response.status).toBe(500);
+    });
+
+    it('surfaces dedupStatus=duplicate when the Feature returns a duplicate row (deterministic hit)', async () => {
+      const canonicalId = '00000000-0000-0000-0000-0000000000c1';
+      const mockRequest = { json: async () => validBody } as Request;
+      createMock.mockResolvedValue({
+        success: true,
+        data: makeTicketRow({
+          id: '123',
+          status: 'duplicate',
+          duplicate_of: canonicalId,
+          dedup_signature: 'sig-y',
+        }),
+      } as Awaited<ReturnType<typeof createTicketFeature>>);
+
+      const response = (await POST(mockRequest)) as MockResponse;
+      const json = (await response.json()) as {
+        ticket: { dedupStatus: string; duplicateOf: string | null; status: string };
+      };
+
+      expect(response.status).toBe(201);
+      expect(json.ticket.status).toBe('duplicate');
+      expect(json.ticket.dedupStatus).toBe('duplicate');
+      expect(json.ticket.duplicateOf).toBe(canonicalId);
     });
   });
 });
