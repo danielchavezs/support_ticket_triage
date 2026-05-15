@@ -1,23 +1,22 @@
 'server-only';
 
 /**
- * AI Provider — single-method adapter for Gemini-driven ticket classification.
+ * AI Provider — two-method adapter for ticket classification (Gemini) and
+ * vector embedding (OpenAI).
  *
- * The Provider is intentionally narrow: one method, `classifyTicket`, that
- * calls Gemini through the Vercel AI SDK and returns the structured object
- * generated for the Feature-owned schema supplied by the caller. Errors
- * propagate raw (the Feature layer normalizes per `AGENTS.md` §6).
+ * The Provider stays narrow: each method maps 1:1 to an underlying SDK call.
+ * Schemas (for classification) and validation (for embedding dimension) live
+ * in the Feature layer or here as small invariants; the Provider itself never
+ * depends on Feature-layer types.
  *
- * Schema enforcement happens at the SDK boundary via `generateObject`, but
- * the schema itself remains in the Feature layer to preserve the repository's
- * dependency direction: Features may depend on Providers, Providers must not
- * depend on Features.
+ * Errors propagate raw — the Feature layer normalizes them to `FeatureError`
+ * per `AGENTS.md` §6.
  */
 
-import { generateObject } from 'ai';
+import { embed, generateObject } from 'ai';
 import type { z } from 'zod';
 
-import { getTriageModel } from '@/services/providers/ai/client';
+import { getEmbeddingModel, getTriageModel } from '@/services/providers/ai/client';
 
 export type AiProvider = {
   classifyTicket: <T>(input: {
@@ -25,7 +24,16 @@ export type AiProvider = {
     description: string;
     schema: z.ZodType<T>;
   }) => Promise<T>;
+  generateEmbedding: (text: string) => Promise<number[]>;
 };
+
+export class EmbeddingDimensionMismatchError extends Error {
+  readonly code = 'EMBEDDING_DIMENSION_MISMATCH';
+  constructor(public expected: number, public actual: number) {
+    super(`Embedding dimension mismatch: expected ${expected}, got ${actual}.`);
+    this.name = 'EmbeddingDimensionMismatchError';
+  }
+}
 
 const SYSTEM_PROMPT = `You classify customer-support tickets for an internal Airiam product.
 Read the subject and description below, then return strictly the JSON object
@@ -51,5 +59,18 @@ export const ai: AiProvider = {
       prompt: `Subject:\n${subject}\n\nDescription:\n${description}`,
     });
     return result.object;
+  },
+
+  async generateEmbedding(text) {
+    const { model, dimensions } = getEmbeddingModel();
+    const result = await embed({
+      model,
+      value: text,
+      providerOptions: { openai: { dimensions } },
+    });
+    if (result.embedding.length !== dimensions) {
+      throw new EmbeddingDimensionMismatchError(dimensions, result.embedding.length);
+    }
+    return result.embedding;
   },
 };

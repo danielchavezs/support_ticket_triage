@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MockedFunction } from 'vitest';
 
-import { ai } from '@/services/providers/ai';
-import { DEFAULT_MODEL_ID, getTriageModel } from '@/services/providers/ai/client';
-import { generateObject } from 'ai';
+import { ai, EmbeddingDimensionMismatchError } from '@/services/providers/ai';
+import {
+  DEFAULT_EMBEDDING_DIMENSIONS,
+  DEFAULT_EMBEDDING_MODEL_ID,
+  DEFAULT_MODEL_ID,
+  getEmbeddingModel,
+  getTriageModel,
+} from '@/services/providers/ai/client';
+import { embed, generateObject } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 
 vi.mock('ai', () => ({
+  embed: vi.fn(),
   generateObject: vi.fn(),
 }));
 
@@ -18,10 +26,20 @@ vi.mock('@ai-sdk/google', () => ({
   }),
 }));
 
+vi.mock('@ai-sdk/openai', () => ({
+  createOpenAI: vi.fn(() => {
+    const embeddingFactory = vi.fn((modelId: string) => ({ modelId, fake: true }));
+    return { embedding: embeddingFactory };
+  }),
+}));
+
 const ENV_BACKUP = {
   GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
   GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
   AI_MODEL: process.env.AI_MODEL,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  AI_EMBEDDING_MODEL: process.env.AI_EMBEDDING_MODEL,
+  AI_EMBEDDING_DIMENSIONS: process.env.AI_EMBEDDING_DIMENSIONS,
 };
 
 const TestClassificationSchema = z.object({
@@ -141,5 +159,102 @@ describe('ai.classifyTicket', () => {
     await expect(
       ai.classifyTicket({ subject: 'x', description: 'y', schema: TestClassificationSchema }),
     ).rejects.toThrow('API rate limit');
+  });
+});
+
+describe('getEmbeddingModel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.AI_EMBEDDING_MODEL;
+    delete process.env.AI_EMBEDDING_DIMENSIONS;
+  });
+
+  afterEach(() => {
+    process.env.OPENAI_API_KEY = ENV_BACKUP.OPENAI_API_KEY;
+    process.env.AI_EMBEDDING_MODEL = ENV_BACKUP.AI_EMBEDDING_MODEL;
+    process.env.AI_EMBEDDING_DIMENSIONS = ENV_BACKUP.AI_EMBEDDING_DIMENSIONS;
+  });
+
+  it('throws when OPENAI_API_KEY is not set', () => {
+    expect(() => getEmbeddingModel()).toThrow(/OPENAI_API_KEY/);
+  });
+
+  it('reads OPENAI_API_KEY and uses the default model + dimensions', () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+
+    const { dimensions } = getEmbeddingModel();
+
+    expect(createOpenAI).toHaveBeenCalledWith({ apiKey: 'sk-test' });
+    const factory = (createOpenAI as unknown as MockedFunction<typeof createOpenAI>).mock.results[0]
+      .value as { embedding: MockedFunction<(id: string) => unknown> };
+    expect(factory.embedding).toHaveBeenCalledWith(DEFAULT_EMBEDDING_MODEL_ID);
+    expect(dimensions).toBe(DEFAULT_EMBEDDING_DIMENSIONS);
+  });
+
+  it('honors AI_EMBEDDING_MODEL and AI_EMBEDDING_DIMENSIONS overrides', () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AI_EMBEDDING_MODEL = 'text-embedding-3-small';
+    process.env.AI_EMBEDDING_DIMENSIONS = '768';
+
+    const { dimensions } = getEmbeddingModel();
+
+    const factory = (createOpenAI as unknown as MockedFunction<typeof createOpenAI>).mock.results[0]
+      .value as { embedding: MockedFunction<(id: string) => unknown> };
+    expect(factory.embedding).toHaveBeenCalledWith('text-embedding-3-small');
+    expect(dimensions).toBe(768);
+  });
+
+  it('rejects an invalid AI_EMBEDDING_DIMENSIONS value', () => {
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.AI_EMBEDDING_DIMENSIONS = 'not-a-number';
+
+    expect(() => getEmbeddingModel()).toThrow(/AI_EMBEDDING_DIMENSIONS/);
+  });
+});
+
+describe('ai.generateEmbedding', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.OPENAI_API_KEY = 'sk-test';
+    delete process.env.AI_EMBEDDING_DIMENSIONS;
+    delete process.env.AI_EMBEDDING_MODEL;
+  });
+
+  afterEach(() => {
+    process.env.OPENAI_API_KEY = ENV_BACKUP.OPENAI_API_KEY;
+  });
+
+  it('returns the SDK embedding when the dimension matches the configured value', async () => {
+    const embedMock = embed as unknown as MockedFunction<typeof embed>;
+    const expected = Array.from({ length: DEFAULT_EMBEDDING_DIMENSIONS }, (_, i) => i / DEFAULT_EMBEDDING_DIMENSIONS);
+    embedMock.mockResolvedValue({ embedding: expected } as unknown as Awaited<ReturnType<typeof embed>>);
+
+    const result = await ai.generateEmbedding('My printer is broken.');
+
+    expect(embedMock).toHaveBeenCalledTimes(1);
+    const callArg = embedMock.mock.calls[0][0] as {
+      model: unknown;
+      value: string;
+      providerOptions: { openai: { dimensions: number } };
+    };
+    expect(callArg.value).toBe('My printer is broken.');
+    expect(callArg.model).toBeDefined();
+    expect(callArg.providerOptions).toEqual({ openai: { dimensions: DEFAULT_EMBEDDING_DIMENSIONS } });
+    expect(result).toEqual(expected);
+  });
+
+  it('throws EmbeddingDimensionMismatchError when the SDK returns the wrong length', async () => {
+    const embedMock = embed as unknown as MockedFunction<typeof embed>;
+    embedMock.mockResolvedValue({ embedding: [0.1, 0.2, 0.3] } as unknown as Awaited<ReturnType<typeof embed>>);
+
+    await expect(ai.generateEmbedding('foo')).rejects.toBeInstanceOf(EmbeddingDimensionMismatchError);
+  });
+
+  it('propagates SDK errors raw (Feature layer normalizes)', async () => {
+    const embedMock = embed as unknown as MockedFunction<typeof embed>;
+    embedMock.mockRejectedValue(new Error('OpenAI rate limit'));
+
+    await expect(ai.generateEmbedding('foo')).rejects.toThrow('OpenAI rate limit');
   });
 });
