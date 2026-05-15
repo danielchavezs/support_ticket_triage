@@ -9,6 +9,7 @@ import {
 } from '@/services/features/tickets/ticketsFeatures';
 import { server as sources } from '@/services/providers/supabase/server';
 import { triageTicketFeature } from '@/services/features/triage/triageTicket';
+import { dedupTicketFeature } from '@/services/features/dedup/dedupTicket';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 vi.mock('@/services/providers/supabase/server', () => ({
@@ -18,6 +19,7 @@ vi.mock('@/services/providers/supabase/server', () => ({
       getById: vi.fn(),
       create: vi.fn(),
       updateTriage: vi.fn(),
+      updateDedupState: vi.fn(),
     },
     ticketEvents: {
       create: vi.fn(),
@@ -25,11 +27,21 @@ vi.mock('@/services/providers/supabase/server', () => ({
     },
     orgs: { getById: vi.fn() },
     users: { getById: vi.fn(), findByEmail: vi.fn() },
+    orgSettings: { getByOrg: vi.fn() },
+    dedupSignatures: {
+      findByNormalizedSignature: vi.fn(),
+      findSimilarTickets: vi.fn(),
+      create: vi.fn(),
+    },
   },
 }));
 
 vi.mock('@/services/features/triage/triageTicket', () => ({
   triageTicketFeature: vi.fn(),
+}));
+
+vi.mock('@/services/features/dedup/dedupTicket', () => ({
+  dedupTicketFeature: vi.fn(),
 }));
 
 const ORG_A = '00000000-0000-0000-0000-00000000000a';
@@ -40,12 +52,19 @@ describe('tickets feature', () => {
   const listMock = sources.tickets.list as unknown as MockedFunction<typeof sources.tickets.list>;
   const getByIdMock = sources.tickets.getById as unknown as MockedFunction<typeof sources.tickets.getById>;
   const createMock = sources.tickets.create as unknown as MockedFunction<typeof sources.tickets.create>;
+  const updateDedupMock = sources.tickets.updateDedupState as unknown as MockedFunction<
+    typeof sources.tickets.updateDedupState
+  >;
   const eventCreateMock = sources.ticketEvents.create as unknown as MockedFunction<typeof sources.ticketEvents.create>;
   const triageMock = triageTicketFeature as unknown as MockedFunction<typeof triageTicketFeature>;
+  const dedupMock = dedupTicketFeature as unknown as MockedFunction<typeof dedupTicketFeature>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: dedup returns `no_hit` so existing tests follow the normal
+    // create → emit → dedup (no_hit) → triage path without per-test setup.
+    dedupMock.mockResolvedValue({ success: true, data: { kind: 'no_hit' } });
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -249,6 +268,129 @@ describe('tickets feature', () => {
         expect.objectContaining({ sourceKind: 'aip_monitoring' }),
       );
     });
+
+    it('skips triage on deterministic dedup hit and returns the duplicate-state ticket', async () => {
+      const created = makeTicketRow({ id: '789', org_id: ORG_A, user_id: USER_A });
+      const duplicate = makeTicketRow({
+        id: '789',
+        org_id: ORG_A,
+        status: 'duplicate',
+        duplicate_of: '00000000-0000-0000-0000-0000000000c1',
+        dedup_signature: 'sig-abc',
+      });
+      createMock.mockResolvedValue(created);
+      eventCreateMock.mockResolvedValue({
+        id: 'evt-3',
+        org_id: ORG_A,
+        ticket_id: '789',
+        event_type: 'received',
+        payload: {},
+        created_at: new Date(0).toISOString(),
+      });
+      dedupMock.mockResolvedValue({
+        success: true,
+        data: {
+          kind: 'deterministic_hit',
+          canonicalTicketId: '00000000-0000-0000-0000-0000000000c1',
+        },
+      });
+      getByIdMock.mockResolvedValue(duplicate);
+
+      const result = await createTicketFeature(baseInput);
+
+      expect(dedupMock).toHaveBeenCalledWith({
+        orgId: ORG_A,
+        ticketId: '789',
+        subject: baseInput.subject,
+        description: baseInput.description,
+      });
+      // Triage must NOT run on a deterministic dedup hit.
+      expect(triageMock).not.toHaveBeenCalled();
+      expect(getByIdMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '789' });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(duplicate);
+    });
+
+    it('continues to triage on a vector dedup hit (soft-flag is event-only)', async () => {
+      const created = makeTicketRow({ id: '790', org_id: ORG_A });
+      const triaged = makeTicketRow({ id: '790', org_id: ORG_A, status: 'triaged', type: 'bug' });
+      createMock.mockResolvedValue(created);
+      eventCreateMock.mockResolvedValue({
+        id: 'evt-4',
+        org_id: ORG_A,
+        ticket_id: '790',
+        event_type: 'received',
+        payload: {},
+        created_at: new Date(0).toISOString(),
+      });
+      dedupMock.mockResolvedValue({
+        success: true,
+        data: {
+          kind: 'vector_hit',
+          candidateCanonicalTicketId: '00000000-0000-0000-0000-0000000000c2',
+          similarity: 0.95,
+        },
+      });
+      triageMock.mockResolvedValue({ success: true, data: triaged });
+
+      const result = await createTicketFeature(baseInput);
+
+      expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '790' });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(triaged);
+    });
+
+    it('still runs triage when dedup itself fails (recoverable degradation)', async () => {
+      const created = makeTicketRow({ id: '791', org_id: ORG_A });
+      const triaged = makeTicketRow({ id: '791', org_id: ORG_A, status: 'triaged' });
+      createMock.mockResolvedValue(created);
+      eventCreateMock.mockResolvedValue({
+        id: 'evt-5',
+        org_id: ORG_A,
+        ticket_id: '791',
+        event_type: 'received',
+        payload: {},
+        created_at: new Date(0).toISOString(),
+      });
+      dedupMock.mockResolvedValue({
+        success: false,
+        error: { code: 'EMBEDDING_FAILED', message: 'OpenAI 503' },
+      });
+      triageMock.mockResolvedValue({ success: true, data: triaged });
+
+      const result = await createTicketFeature(baseInput);
+
+      expect(triageMock).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(triaged);
+    });
+
+    it('falls back to the created row when refetch after deterministic hit fails', async () => {
+      const created = makeTicketRow({ id: '792', org_id: ORG_A });
+      createMock.mockResolvedValue(created);
+      eventCreateMock.mockResolvedValue({
+        id: 'evt-6',
+        org_id: ORG_A,
+        ticket_id: '792',
+        event_type: 'received',
+        payload: {},
+        created_at: new Date(0).toISOString(),
+      });
+      dedupMock.mockResolvedValue({
+        success: true,
+        data: {
+          kind: 'deterministic_hit',
+          canonicalTicketId: '00000000-0000-0000-0000-0000000000c3',
+        },
+      });
+      getByIdMock.mockRejectedValue(new Error('DB momentary outage'));
+
+      const result = await createTicketFeature(baseInput);
+
+      expect(triageMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(created);
+    });
   });
 
   describe('getTicketFeature', () => {
@@ -346,6 +488,159 @@ describe('tickets feature', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error.code).toBe('TRIAGE_FAILED');
+    });
+
+    it('no-ops when status=duplicate and canonical still exists', async () => {
+      const canonicalId = '00000000-0000-0000-0000-0000000000c2';
+      const duplicate = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'duplicate',
+        duplicate_of: canonicalId,
+        dedup_signature: 'sig-x',
+      });
+      const canonical = makeTicketRow({ id: canonicalId, org_id: ORG_A, status: 'triaged' });
+      // The Feature fetches the ticket first, then the canonical. Both via getById.
+      getByIdMock.mockImplementation(async ({ ticketId: id }) => {
+        if (id === ticketId) return duplicate;
+        if (id === canonicalId) return canonical;
+        return null;
+      });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(triageMock).not.toHaveBeenCalled();
+      expect(dedupMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(duplicate);
+    });
+
+    it('clears stale duplicate state and re-runs dedup when canonical is gone', async () => {
+      const canonicalId = '00000000-0000-0000-0000-0000000000cd';
+      const staleDuplicate = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'duplicate',
+        duplicate_of: canonicalId,
+        dedup_signature: 'sig-old',
+      });
+      const cleared = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'received',
+        duplicate_of: null,
+        dedup_signature: 'sig-old',
+      });
+      const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug' });
+      getByIdMock.mockImplementation(async ({ ticketId: id }) => {
+        if (id === ticketId) return staleDuplicate;
+        if (id === canonicalId) return null; // canonical gone
+        return null;
+      });
+      updateDedupMock.mockResolvedValue(cleared);
+      // dedup re-run after clear: still a signature but no_hit on the canonical itself
+      // (canonical_ticket_id pointed at the dead row). Treat as no_hit to fall through
+      // to the triage branch — the cleared row has dedup_signature set so the signature
+      // branch is skipped.
+      dedupMock.mockResolvedValue({ success: true, data: { kind: 'no_hit' } });
+      triageMock.mockResolvedValue({ success: true, data: triaged });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(updateDedupMock).toHaveBeenCalledWith({
+        orgId: ORG_A,
+        ticketId,
+        update: { duplicateOf: null, status: 'received' },
+      });
+      // Dedup signature is non-null on the cleared row, so Branch 2 (re-dedup)
+      // should NOT fire — only Branch 3 (triage) should.
+      expect(dedupMock).not.toHaveBeenCalled();
+      expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(triaged);
+    });
+
+    it('re-runs dedup when dedup_signature is missing on a received row', async () => {
+      const fresh = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'received',
+        dedup_signature: null,
+        type: null,
+      });
+      const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug' });
+      getByIdMock.mockResolvedValue(fresh);
+      dedupMock.mockResolvedValue({ success: true, data: { kind: 'no_hit' } });
+      triageMock.mockResolvedValue({ success: true, data: triaged });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(dedupMock).toHaveBeenCalledWith({
+        orgId: ORG_A,
+        ticketId,
+        subject: fresh.subject,
+        description: fresh.description,
+      });
+      // After no-hit dedup, triage still runs because type is null.
+      expect(triageMock).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(triaged);
+    });
+
+    it('returns the duplicate row directly when retry dedup finds a deterministic hit', async () => {
+      const fresh = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'received',
+        dedup_signature: null,
+        type: null,
+      });
+      const nowDuplicate = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'duplicate',
+        duplicate_of: '00000000-0000-0000-0000-0000000000c1',
+        dedup_signature: 'sig-new',
+      });
+      getByIdMock
+        .mockResolvedValueOnce(fresh) // initial fetch
+        .mockResolvedValueOnce(nowDuplicate); // refetch after dedup hit
+      dedupMock.mockResolvedValue({
+        success: true,
+        data: {
+          kind: 'deterministic_hit',
+          canonicalTicketId: '00000000-0000-0000-0000-0000000000c1',
+        },
+      });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(triageMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(nowDuplicate);
+    });
+
+    it('returns DEDUP_PERSIST_FAILED when the stale-duplicate clear write fails', async () => {
+      const staleDuplicate = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'duplicate',
+        duplicate_of: '00000000-0000-0000-0000-0000000000ee',
+        dedup_signature: 'sig-old',
+      });
+      getByIdMock.mockImplementation(async ({ ticketId: id }) => {
+        if (id === ticketId) return staleDuplicate;
+        return null;
+      });
+      updateDedupMock.mockRejectedValue(new Error('clear write failed'));
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.code).toBe('DEDUP_PERSIST_FAILED');
+        expect(result.error.message).toContain('clear write failed');
+      }
     });
   });
 });
