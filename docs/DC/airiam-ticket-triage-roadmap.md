@@ -27,6 +27,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 - [x] **Phase 1** — Org/User Schema, Enums, RLS
 - [x] **Phase 2** — Triage Pipeline Refactor
 - [x] **Phase 3** — Deduplication (deterministic + vector)
+- [ ] **Phase 3.5** — Tool-Augmented Classification
 - [ ] **Phase 4** — Linear Outbound (push)
 - [ ] **Phase 5** — Linear Inbound Webhook
 - [ ] **Phase 6** — Email Notifications
@@ -198,6 +199,56 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 - Dedup runs inline before LLM classification (per architecture pipeline step 2).
 - Both strategies are wired and respect `org_id` scoping.
 - Action on hit, window, and vector-default behavior match the resolved blockers.
+
+---
+
+### Phase 3.5 — Tool-Augmented Classification
+
+**Goal:** upgrade the triage classifier to Gemini 3 Flash and convert the single-shot `generateObject` call into a **bounded** tool-loop. The classifier gains two read-only tools (similar-ticket lookup, recent-user-ticket lookup) to ground its judgment in local context, but everything else (dedup, priority matrix, persistence, retry, event taxonomy) stays strictly deterministic. Slotted after Phase 3 / before Phase 4 so the agent tool surface is stable when Linear-side tools join in Phase 4.
+
+**Prerequisites:**
+
+- [x] Phase 2 complete.
+- [x] Phase 3 complete (vector similarity infra is reused by the `findSimilarTicketsForContext` tool).
+- No new decision blockers.
+
+**Execution checklist:**
+
+- [ ] Bump `DEFAULT_MODEL_ID` in `services/providers/ai/client.ts` from `gemini-2.5-flash-lite` to `gemini-3-flash-preview`. Update `.env.local.example` comment. Verify the identifier against `@ai-sdk/google` 3.0.21; `AI_MODEL` env override absorbs any vendor-side identifier drift.
+- [ ] Add `classifyTicketWithTools<T>` to `services/providers/ai/index.ts`. Uses `generateText` with `tools` + `output: Output.object({ schema })` + `stopWhen: stepCountIs(maxSteps)`. Returns `{ result: T; steps: StepResult[] }`. Provider remains schema-agnostic (no imports from `services/features/`). Existing `classifyTicket<T>` (single-shot) is retained as the fallback path.
+- [ ] Add `listByUser({ orgId, userId, limit })` to `services/providers/supabase/domains/tickets.ts`. Org + user predicates, soft-delete filter, ordered `created_at DESC`. Provider-domain test for the predicates.
+- [ ] Create `services/features/triage/tools.ts` exporting `buildTriageTools(ctx)` where `ctx = { orgId, userId, subject, description }`. Tools:
+  - `findSimilarTicketsForContext({ limit?: number = 5 })` — memoizes one embedding via `ai.generateEmbedding`, calls `sources.dedupSignatures.findSimilarTickets`, hydrates each hit via `sources.tickets.getById`, returns top-K with `{ ticketId, similarity, type, severity, status, subjectPreview }`.
+  - `getRecentUserTickets({ limit?: number = 5 })` — calls `sources.tickets.listByUser`, returns recent rows with the same preview shape (minus `similarity`, plus `createdAt`).
+  - Tool `inputSchema` does **not** include `orgId` / `userId`; both are bound from the context closure so the agent cannot cross orgs.
+- [ ] Create `services/features/triage/config.ts` exporting `MAX_TOOL_ROUNDS = 4`, `TOOL_LOOP_DEADLINE_MS = 15000`, and `CONTEXT_SIMILARITY_THRESHOLD = 0.7`.
+- [ ] Rewire `services/features/triage/triageTicket.ts`:
+  - Build tools with the ticket's `org_id`, `user_id`, `subject`, `description`.
+  - First attempt: `ai.classifyTicketWithTools(...)` runs with `TOOL_LOOP_DEADLINE_MS` enforced via SDK timeout / abort signal.
+  - On success: defense-in-depth Zod re-parse, persist via existing `tickets.updateTriage`, emit `triaged` event with `payload.tool_calls = summarizeSteps(result.steps)` where each entry is `{ name, input, durationMs, ok }` (outputs are not stored).
+  - On timeout or hard error: invoke existing `ai.classifyTicket(...)` (no tools). On success: persist + emit `triaged` with `payload.tool_calls = []` and `payload.fallback = 'single_shot'`. On second failure: existing `persistFailure(...)` path.
+- [ ] Tests:
+  - New `tests/unit/triageTools.test.ts` — tool wrappers inject context, ignore agent-passed org/user, memoize the embedding within a single `buildTriageTools` invocation.
+  - New `tests/unit/ticketsListByUser.test.ts` (or extend `orgsUsersDomains.test.ts`) — Provider-domain test for the org + user predicates and soft-delete filter.
+  - Extend `tests/unit/aiProvider.test.ts` — covers `classifyTicketWithTools` forwarding `tools`, `stopWhen`, `output` and returning `{ result, steps }`.
+  - Extend `tests/unit/triageTicket.test.ts` — zero-tool happy path, tool-use happy path with `tool_calls` in event payload, tool-loop timeout → single-shot fallback runs with `payload.fallback === 'single_shot'`, tool-loop + fallback both fail → existing failure-state path.
+- [ ] Update `docs/DC/airiam-ticket-triage-architecture.md`: Pipeline step 3 rewritten for the bounded tool-loop with single-shot fallback. Add a "Triage Tool Surface" subsection covering the two tools, guardrails, audit shape, and the "no write tools" invariant.
+- [ ] Update this roadmap: check the Phase 3.5 box in the Master Progress Checklist in the same PR that lands the wiring.
+- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass; coverage stays at or above 80% on every metric.
+
+**Deferred (post-MVP or folded into later phases):**
+
+- `lookupTicketByExactSubject` tool — currently subsumed by `findSimilarTicketsForContext` at v1 corpus size; revisit post-MVP if exact-match precision becomes load-bearing.
+- `getActiveLinearIssues` tool — folded into Phase 4 (Linear Outbound). When the Linear Provider lands, add the tool factory alongside.
+- Tool-output recording in audit log — Phase 3.5 stores tool **inputs** only (`{ name, input, durationMs, ok }`). A bounded `outputPreview` field can be added later if operators need it.
+
+**Exit criteria:**
+
+- Both `classifyTicket` and `classifyTicketWithTools` exist; the Provider has no imports from `services/features/`.
+- `triageTicketFeature` runs the tool-loop first and falls back to single-shot on timeout / hard error; persisted ticket shape and `ticket_events` taxonomy are unchanged.
+- `ticket_events.triaged.payload.tool_calls` is populated on the tool-loop path; `payload.fallback = 'single_shot'` on the fallback path.
+- Tool wrappers bind `orgId`/`userId` from context; tool input schemas do not accept those identifiers.
+- Priority matrix is unchanged and still deterministic post-classification.
 
 ---
 
