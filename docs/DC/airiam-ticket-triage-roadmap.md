@@ -26,7 +26,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 - [x] **Phase 0** — Foundation Hygiene
 - [x] **Phase 1** — Org/User Schema, Enums, RLS
 - [x] **Phase 2** — Triage Pipeline Refactor
-- [ ] **Phase 3** — Deduplication (deterministic + vector)
+- [x] **Phase 3** — Deduplication (deterministic + vector)
 - [ ] **Phase 4** — Linear Outbound (push)
 - [ ] **Phase 5** — Linear Inbound Webhook
 - [ ] **Phase 6** — Email Notifications
@@ -49,10 +49,10 @@ Agents must not implement past a blocker. If a phase looks blocked, stop, surfac
 | `BL-001` | Priority matrix validated against ATD triage practice (or replaced) | Phase 1, Phase 2 | **Resolved 2026-05-13** | Daniel | Draft matrix approved as-is. Lands as `services/features/triage/priorityMatrix.ts` in Phase 2. |
 | `BL-002` | `type` + `severity` enum values validated against ATD labelling practice | Phase 1, Phase 2 | **Resolved 2026-05-13** | Daniel | Both enums approved as-drafted. `type`: `bug \| feature \| improvement \| question \| incident`. `severity`: `blocker \| major \| minor \| trivial`. |
 | `BL-003` | Role model on `users` table (admin / submitter / read-only / etc., or none for v1) | Phase 1 | **Resolved 2026-05-13** | Daniel | **No role column in v1.** Additive path preserved — adding a role column or `roles` table later is a future migration, documented in the architecture's Roadmap and Modularity Seams table. |
-| `BL-004` | Dedup action on hit (reject, link, merge, soft-flag only) | Phase 3 | Open | Daniel | — |
-| `BL-005` | Dedup time window (forever, 30d, 90d, per-org configurable) | Phase 3 | Open | Daniel | — |
-| `BL-006` | Vector dedup default state (on, off, behind feature flag) | Phase 3 | Open | Daniel | — |
-| `BL-007` | Embedding model for `pgvector` dedup (Gemini, Vertex AI, OpenAI, etc.) | Phase 3 | Open | Daniel | — |
+| `BL-004` | Dedup action on hit (reject, link, merge, soft-flag only) | Phase 3 | **Resolved 2026-05-14** | Daniel | Hybrid action. Deterministic hash hit = hard link (`duplicate_of` set, `status='duplicate'`, skip triage). Vector hit = soft flag (emit `ticket_events.deduplicated` only; row unchanged). |
+| `BL-005` | Dedup time window (forever, 30d, 90d, per-org configurable) | Phase 3 | **Resolved 2026-05-14** | Daniel | Per-org configurable, default 90 days. New `org_settings.dedup_window_days` column (NULL = system default 90). |
+| `BL-006` | Vector dedup default state (on, off, behind feature flag) | Phase 3 | **Resolved 2026-05-14** | Daniel | Per-org configurable, default off. New `org_settings.vector_dedup_enabled` boolean column. Dev seed enables it for the ATD-internal org. |
+| `BL-007` | Embedding model for `pgvector` dedup (Gemini, Vertex AI, OpenAI, etc.) | Phase 3 | **Resolved 2026-05-14** | Daniel | OpenAI `text-embedding-3-large` truncated to 1536 dims via the `dimensions` API parameter (Matryoshka). Fits standard pgvector HNSW index ceiling; reversible to `halfvec(3072)` if recall demands. |
 | `BL-008` | Linear API key + team ID provisioned for `dev` and `prod` environments | Phase 4 | Open | Daniel | — |
 | `BL-009` | Email provider (Resend, Postmark, ACS, SendGrid, etc.) | Phase 6 | Open | Daniel | — |
 | `BL-010` | Email sending domain + DNS records (SPF, DKIM, DMARC) | Phase 6 | Open | Daniel | — |
@@ -173,25 +173,25 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Prerequisites:**
 
-- [ ] Phase 2 complete.
-- [ ] `BL-004` (dedup action on hit) resolved.
-- [ ] `BL-005` (dedup window) resolved.
-- [ ] `BL-006` (vector default state) resolved.
-- [ ] `BL-007` (embedding model) resolved.
+- [x] Phase 2 complete.
+- [x] `BL-004` (dedup action on hit) resolved.
+- [x] `BL-005` (dedup window) resolved.
+- [x] `BL-006` (vector default state) resolved.
+- [x] `BL-007` (embedding model) resolved.
 
 **Execution checklist:**
 
-- [ ] Create `services/features/dedup/` with `DedupStrategy.ts` interface, `deterministicHash.ts`, `vectorSimilarity.ts`, `dedupTicket.ts` orchestrator.
-- [ ] Implement subject+description normalization (lowercase, trim, collapse whitespace, strip punctuation).
-- [ ] Implement deterministic hash insert+lookup against `dedup_signatures`, scoped to `org_id`.
-- [ ] Add embedding generation Provider call (model per `BL-007`) and persist `description_embedding` on insert.
-- [ ] Implement cosine-similarity query scoped to `org_id` with configurable threshold.
-- [ ] Apply the `BL-004` action on hit (link only / merge / reject — implementation depends on resolution).
-- [ ] Apply the `BL-005` dedup window in the lookup query.
-- [ ] Honor the `BL-006` vector default state (env-toggled or hardcoded).
-- [ ] Emit `ticket_events.deduplicated` on hit.
-- [ ] Tests: deterministic-hash exact and near-miss, vector-similarity true positive and threshold-edge negative, cross-org isolation, window boundary.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Create `services/features/dedup/` with `DedupStrategy.ts` interface, `deterministicHash.ts`, `vectorSimilarity.ts`, `dedupTicket.ts` orchestrator.
+- [x] Implement subject+description normalization (lowercase, trim, collapse whitespace, strip punctuation).
+- [x] Implement deterministic hash insert+lookup against `dedup_signatures`, scoped to `org_id`.
+- [x] Add embedding generation Provider call (model per `BL-007`) and persist `description_embedding` on insert.
+- [x] Implement cosine-similarity query scoped to `org_id` with configurable threshold.
+- [x] Apply the `BL-004` action on hit (link only / merge / reject — implementation depends on resolution).
+- [x] Apply the `BL-005` dedup window in the lookup query.
+- [x] Honor the `BL-006` vector default state (env-toggled or hardcoded).
+- [x] Emit `ticket_events.deduplicated` on hit.
+- [x] Tests: deterministic-hash exact and near-miss, vector-similarity true positive and threshold-edge negative, cross-org isolation, window boundary.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
