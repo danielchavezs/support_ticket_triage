@@ -53,6 +53,44 @@ export type Database = {
           },
         ]
       }
+      org_settings: {
+        Row: {
+          created_at: string
+          dedup_window_days: number | null
+          deleted_at: string | null
+          id: string
+          org_id: string
+          updated_at: string
+          vector_dedup_enabled: boolean
+        }
+        Insert: {
+          created_at?: string
+          dedup_window_days?: number | null
+          deleted_at?: string | null
+          id?: string
+          org_id: string
+          updated_at?: string
+          vector_dedup_enabled?: boolean
+        }
+        Update: {
+          created_at?: string
+          dedup_window_days?: number | null
+          deleted_at?: string | null
+          id?: string
+          org_id?: string
+          updated_at?: string
+          vector_dedup_enabled?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_settings_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       orgs: {
         Row: {
           created_at: string
@@ -259,7 +297,19 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      find_similar_tickets: {
+        Args: {
+          p_limit: number
+          p_org_id: string
+          p_query_embedding: string
+          p_similarity_threshold: number
+          p_window_days: number
+        }
+        Returns: {
+          similarity: number
+          ticket_id: string
+        }[]
+      }
     }
     Enums: {
       ticket_event_type:

@@ -20,7 +20,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Database, Tables, TablesInsert } from '@/assets/databaseTypes';
+import type { Database, Tables, TablesInsert, TablesUpdate } from '@/assets/databaseTypes';
+import { serializeEmbedding } from '@/services/providers/supabase/vectorEncoding';
 
 export type TicketRow = Tables<'tickets'>;
 export type NewTicketRow = TablesInsert<'tickets'>;
@@ -32,6 +33,19 @@ export type TicketStatus = Database['public']['Enums']['ticket_status'];
 export type TicketSourceKind = Database['public']['Enums']['ticket_source_kind'];
 
 export type TicketsSource = ReturnType<typeof makeTickets>;
+
+/**
+ * Partial update for Phase 3 dedup-state fields. Only keys present on the
+ * object are written to the row — missing keys leave the column untouched.
+ * Pass `null` explicitly to clear a column (e.g., clearing a stale
+ * `duplicate_of` link during retry).
+ */
+export type TicketDedupUpdate = {
+  dedupSignature?: string | null;
+  descriptionEmbedding?: number[] | null;
+  duplicateOf?: string | null;
+  status?: TicketStatus;
+};
 
 export type CreateTicketInput = {
   orgId: string;
@@ -141,6 +155,57 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
           status: update.status,
           triage_error: update.triageError,
         })
+        .eq('id', ticketId)
+        .eq('org_id', orgId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    /**
+     * Apply Phase 3 dedup-state fields to a ticket. Partial: only fields
+     * present on `update` are written. `descriptionEmbedding` is accepted as
+     * a `number[]` and serialized to the pgvector text format inside this
+     * method so callers never deal with the wire format.
+     *
+     * Ordering caveat: dedup state and triage state can both reach the same
+     * row, but never concurrently in the happy path — `createTicketFeature`
+     * runs dedup strictly before triage, and the retry dispatcher serializes
+     * the two paths.
+     */
+    async updateDedupState({
+      orgId,
+      ticketId,
+      update,
+    }: {
+      orgId: string;
+      ticketId: string;
+      update: TicketDedupUpdate;
+    }): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+
+      const patch: TablesUpdate<'tickets'> = {};
+      if ('dedupSignature' in update) {
+        patch.dedup_signature = update.dedupSignature ?? null;
+      }
+      if ('descriptionEmbedding' in update) {
+        patch.description_embedding =
+          update.descriptionEmbedding == null
+            ? null
+            : serializeEmbedding(update.descriptionEmbedding);
+      }
+      if ('duplicateOf' in update) {
+        patch.duplicate_of = update.duplicateOf ?? null;
+      }
+      if (update.status !== undefined) {
+        patch.status = update.status;
+      }
+
+      const { data, error } = await supabase
+        .from('tickets')
+        .update(patch)
         .eq('id', ticketId)
         .eq('org_id', orgId)
         .select('*')
