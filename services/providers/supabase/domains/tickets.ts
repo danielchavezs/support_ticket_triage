@@ -197,6 +197,43 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
     },
 
     /**
+     * Persist the Linear issue ID after a successful outbound push (Phase 4).
+     *
+     * Phase 4 invariants:
+     *   - The partial-unique index on `linear_issue_id` (where not null)
+     *     rejects a second push for the same ticket OR a stale push that
+     *     references an already-claimed Linear issue. The Feature catches
+     *     the unique-violation and treats it as idempotent success.
+     *   - We do NOT change `status` here — the ticket stays `triaged`
+     *     after a successful push. `pushed_to_linear` is an event, not a
+     *     row-state transition; this matches the rest of the v1 status
+     *     vocabulary (received → triaged → ...). Future workflows that
+     *     surface "delivered to Linear" as a UI state can introduce a
+     *     new status value without churning this method.
+     */
+    async updateLinearLink({
+      orgId,
+      ticketId,
+      linearIssueId,
+    }: {
+      orgId: string;
+      ticketId: string;
+      linearIssueId: string;
+    }): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .update({ linear_issue_id: linearIssueId })
+        .eq('id', ticketId)
+        .eq('org_id', orgId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    /**
      * Apply Phase 3 dedup-state fields to a ticket. Partial: only fields
      * present on `update` are written. `descriptionEmbedding` is accepted as
      * a `number[]` and serialized to the pgvector text format inside this

@@ -10,6 +10,7 @@ import {
 import { server as sources } from '@/services/providers/supabase/server';
 import { triageTicketFeature } from '@/services/features/triage/triageTicket';
 import { dedupTicketFeature } from '@/services/features/dedup/dedupTicket';
+import { pushTicketToLinearFeature } from '@/services/features/linear-sync/pushTicket';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 vi.mock('@/services/providers/supabase/server', () => ({
@@ -44,6 +45,10 @@ vi.mock('@/services/features/dedup/dedupTicket', () => ({
   dedupTicketFeature: vi.fn(),
 }));
 
+vi.mock('@/services/features/linear-sync/pushTicket', () => ({
+  pushTicketToLinearFeature: vi.fn(),
+}));
+
 const ORG_A = '00000000-0000-0000-0000-00000000000a';
 const ORG_B = '00000000-0000-0000-0000-00000000000b';
 const USER_A = '00000000-0000-0000-0000-0000000000a1';
@@ -58,6 +63,9 @@ describe('tickets feature', () => {
   const eventCreateMock = sources.ticketEvents.create as unknown as MockedFunction<typeof sources.ticketEvents.create>;
   const triageMock = triageTicketFeature as unknown as MockedFunction<typeof triageTicketFeature>;
   const dedupMock = dedupTicketFeature as unknown as MockedFunction<typeof dedupTicketFeature>;
+  const linearPushMock = pushTicketToLinearFeature as unknown as MockedFunction<
+    typeof pushTicketToLinearFeature
+  >;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
@@ -65,6 +73,23 @@ describe('tickets feature', () => {
     // Default: dedup returns `no_hit` so existing tests follow the normal
     // create → emit → dedup (no_hit) → triage path without per-test setup.
     dedupMock.mockResolvedValue({ success: true, data: { kind: 'no_hit' } });
+    // Default: Linear push echoes back the triaged ticket as `pushed`. Tests
+    // that care about the Linear branch (e.g. retry-after-transient-failure)
+    // override per-test.
+    linearPushMock.mockImplementation(async ({ ticketId }) =>
+      ({
+        success: true,
+        data: {
+          kind: 'pushed',
+          ticket: makeTicketRow({
+            id: ticketId,
+            org_id: ORG_A,
+            status: 'triaged',
+            linear_issue_id: 'lin-default',
+          }),
+        },
+      } as Awaited<ReturnType<typeof pushTicketToLinearFeature>>),
+    );
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -122,9 +147,10 @@ describe('tickets feature', () => {
       description: 'I cannot log in to my account.',
     };
 
-    it('creates a ticket, emits received, and inline-invokes triage', async () => {
+    it('creates a ticket, emits received, inline-invokes triage, then inline-pushes to Linear', async () => {
       const created = makeTicketRow({ id: '123', org_id: ORG_A, user_id: USER_A, subject: baseInput.subject });
       const triaged = makeTicketRow({ id: '123', org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-create' });
       createMock.mockResolvedValue(created);
       eventCreateMock.mockResolvedValue({
         id: 'evt-1',
@@ -135,6 +161,7 @@ describe('tickets feature', () => {
         created_at: new Date(0).toISOString(),
       });
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await createTicketFeature(baseInput);
 
@@ -151,6 +178,37 @@ describe('tickets feature', () => {
         eventType: 'received',
       });
       expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '123' });
+      expect(linearPushMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '123' });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(linked);
+    });
+
+    it('does not invoke Linear push when triage produces a non-triaged status', async () => {
+      const created = makeTicketRow({ id: '123', org_id: ORG_A });
+      const failedTriage = makeTicketRow({ id: '123', org_id: ORG_A, status: 'failed', triage_error: 'boom' });
+      createMock.mockResolvedValue(created);
+      triageMock.mockResolvedValue({ success: true, data: failedTriage });
+
+      const result = await createTicketFeature(baseInput);
+
+      expect(triageMock).toHaveBeenCalled();
+      expect(linearPushMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual(failedTriage);
+    });
+
+    it('Linear push failure does not roll back ticket creation; returns the triaged row unchanged', async () => {
+      const created = makeTicketRow({ id: '123', org_id: ORG_A });
+      const triaged = makeTicketRow({ id: '123', org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
+      createMock.mockResolvedValue(created);
+      triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({
+        success: false,
+        error: { code: 'LINEAR_PUSH_FAILED', message: 'rate limited' },
+      });
+
+      const result = await createTicketFeature(baseInput);
+
       expect(result.success).toBe(true);
       if (result.success) expect(result.data).toEqual(triaged);
     });
@@ -238,15 +296,17 @@ describe('tickets feature', () => {
     it('treats event emission failure as non-fatal and still runs triage', async () => {
       const created = makeTicketRow({ id: '123', org_id: ORG_A });
       const triaged = makeTicketRow({ id: '123', org_id: ORG_A, status: 'triaged' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-evt' });
       createMock.mockResolvedValue(created);
       eventCreateMock.mockRejectedValue(new Error('events table down'));
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await createTicketFeature(baseInput);
 
       expect(triageMock).toHaveBeenCalled();
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(triaged);
+      if (result.success) expect(result.data).toEqual(linked);
     });
 
     it('forwards an explicit sourceKind when provided', async () => {
@@ -314,6 +374,7 @@ describe('tickets feature', () => {
     it('continues to triage on a vector dedup hit (soft-flag is event-only)', async () => {
       const created = makeTicketRow({ id: '790', org_id: ORG_A });
       const triaged = makeTicketRow({ id: '790', org_id: ORG_A, status: 'triaged', type: 'bug' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-vec' });
       createMock.mockResolvedValue(created);
       eventCreateMock.mockResolvedValue({
         id: 'evt-4',
@@ -332,17 +393,19 @@ describe('tickets feature', () => {
         },
       });
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await createTicketFeature(baseInput);
 
       expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId: '790' });
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(triaged);
+      if (result.success) expect(result.data).toEqual(linked);
     });
 
     it('still runs triage when dedup itself fails (recoverable degradation)', async () => {
       const created = makeTicketRow({ id: '791', org_id: ORG_A });
       const triaged = makeTicketRow({ id: '791', org_id: ORG_A, status: 'triaged' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-dedup-fail' });
       createMock.mockResolvedValue(created);
       eventCreateMock.mockResolvedValue({
         id: 'evt-5',
@@ -357,12 +420,13 @@ describe('tickets feature', () => {
         error: { code: 'EMBEDDING_FAILED', message: 'OpenAI 503' },
       });
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await createTicketFeature(baseInput);
 
       expect(triageMock).toHaveBeenCalled();
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(triaged);
+      if (result.success) expect(result.data).toEqual(linked);
     });
 
     it('falls back to the created row when refetch after deterministic hit fails', async () => {
@@ -429,24 +493,32 @@ describe('tickets feature', () => {
   describe('retryTicketTriageFeature', () => {
     const ticketId = '00000000-0000-0000-0000-0000000000c1';
 
-    it('dispatches to triage when the ticket is in failed state', async () => {
+    it('dispatches to triage when the ticket is in failed state; chains to Linear push on success', async () => {
       const failed = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'failed', type: null });
       const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-1' });
       getByIdMock.mockResolvedValue(failed);
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({
+        success: true,
+        data: { kind: 'pushed', ticket: linked },
+      });
 
       const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
 
       expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
+      expect(linearPushMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(triaged);
+      if (result.success) expect(result.data).toEqual(linked);
     });
 
     it('dispatches to triage when type is null (received but never classified)', async () => {
       const received = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'received', type: null });
       const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'feature' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-2' });
       getByIdMock.mockResolvedValue(received);
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
 
@@ -455,15 +527,65 @@ describe('tickets feature', () => {
       if (result.success) expect(result.data.status).toBe('triaged');
     });
 
-    it('is a no-op for an already-triaged ticket', async () => {
-      const already = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug', priority: 'P2' });
+    it('is a no-op for an already-triaged-and-Linear-linked ticket', async () => {
+      const already = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'triaged',
+        type: 'bug',
+        priority: 'P2',
+        linear_issue_id: 'lin-existing',
+      });
       getByIdMock.mockResolvedValue(already);
 
       const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
 
       expect(triageMock).not.toHaveBeenCalled();
+      expect(linearPushMock).not.toHaveBeenCalled();
       expect(result.success).toBe(true);
       if (result.success) expect(result.data).toEqual(already);
+    });
+
+    it('re-runs the Linear push when status=triaged but linear_issue_id is missing (Phase 4)', async () => {
+      const triagedNoLink = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'triaged',
+        type: 'bug',
+        priority: 'P2',
+        linear_issue_id: null,
+      });
+      const linked = makeTicketRow({ ...triagedNoLink, linear_issue_id: 'lin-3' });
+      getByIdMock.mockResolvedValue(triagedNoLink);
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(triageMock).not.toHaveBeenCalled();
+      expect(linearPushMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data.linear_issue_id).toBe('lin-3');
+    });
+
+    it('surfaces the LINEAR_PUSH_FAILED error when the retry push itself fails', async () => {
+      const triagedNoLink = makeTicketRow({
+        id: ticketId,
+        org_id: ORG_A,
+        status: 'triaged',
+        type: 'bug',
+        priority: 'P2',
+        linear_issue_id: null,
+      });
+      getByIdMock.mockResolvedValue(triagedNoLink);
+      linearPushMock.mockResolvedValue({
+        success: false,
+        error: { code: 'LINEAR_PUSH_FAILED', message: 'rate limited' },
+      });
+
+      const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.code).toBe('LINEAR_PUSH_FAILED');
     });
 
     it('returns TICKET_NOT_FOUND when the ticket does not exist', async () => {
@@ -532,6 +654,7 @@ describe('tickets feature', () => {
         dedup_signature: 'sig-old',
       });
       const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-stale-clear' });
       getByIdMock.mockImplementation(async ({ ticketId: id }) => {
         if (id === ticketId) return staleDuplicate;
         if (id === canonicalId) return null; // canonical gone
@@ -544,6 +667,7 @@ describe('tickets feature', () => {
       // branch is skipped.
       dedupMock.mockResolvedValue({ success: true, data: { kind: 'no_hit' } });
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
 
@@ -553,11 +677,12 @@ describe('tickets feature', () => {
         update: { duplicateOf: null, status: 'received' },
       });
       // Dedup signature is non-null on the cleared row, so Branch 2 (re-dedup)
-      // should NOT fire — only Branch 3 (triage) should.
+      // should NOT fire — only Branch 3 (triage) and Branch 4 (Linear push) should.
       expect(dedupMock).not.toHaveBeenCalled();
       expect(triageMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
+      expect(linearPushMock).toHaveBeenCalledWith({ orgId: ORG_A, ticketId });
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(triaged);
+      if (result.success) expect(result.data).toEqual(linked);
     });
 
     it('re-runs dedup when dedup_signature is missing on a received row', async () => {
@@ -569,9 +694,11 @@ describe('tickets feature', () => {
         type: null,
       });
       const triaged = makeTicketRow({ id: ticketId, org_id: ORG_A, status: 'triaged', type: 'bug' });
+      const linked = makeTicketRow({ ...triaged, linear_issue_id: 'lin-fresh' });
       getByIdMock.mockResolvedValue(fresh);
       dedupMock.mockResolvedValue({ success: true, data: { kind: 'no_hit' } });
       triageMock.mockResolvedValue({ success: true, data: triaged });
+      linearPushMock.mockResolvedValue({ success: true, data: { kind: 'pushed', ticket: linked } });
 
       const result = await retryTicketTriageFeature({ orgId: ORG_A, ticketId });
 
@@ -581,10 +708,11 @@ describe('tickets feature', () => {
         subject: fresh.subject,
         description: fresh.description,
       });
-      // After no-hit dedup, triage still runs because type is null.
+      // After no-hit dedup, triage still runs because type is null; then Linear push.
       expect(triageMock).toHaveBeenCalled();
+      expect(linearPushMock).toHaveBeenCalled();
       expect(result.success).toBe(true);
-      if (result.success) expect(result.data).toEqual(triaged);
+      if (result.success) expect(result.data).toEqual(linked);
     });
 
     it('returns the duplicate row directly when retry dedup finds a deterministic hit', async () => {

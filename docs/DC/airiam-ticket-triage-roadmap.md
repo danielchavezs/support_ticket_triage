@@ -28,7 +28,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 - [x] **Phase 2** — Triage Pipeline Refactor
 - [x] **Phase 3** — Deduplication (deterministic + vector)
 - [x] **Phase 3.5** — Tool-Augmented Classification
-- [ ] **Phase 4** — Linear Outbound (push)
+- [x] **Phase 4** — Linear Outbound (push)
 - [ ] **Phase 5** — Linear Inbound Webhook
 - [ ] **Phase 6** — Email Notifications
 - [ ] **Phase 7** — Caller Authentication Hardening
@@ -54,7 +54,7 @@ Agents must not implement past a blocker. If a phase looks blocked, stop, surfac
 | `BL-005` | Dedup time window (forever, 30d, 90d, per-org configurable) | Phase 3 | **Resolved 2026-05-14** | Daniel | Per-org configurable, default 90 days. New `org_settings.dedup_window_days` column (NULL = system default 90). |
 | `BL-006` | Vector dedup default state (on, off, behind feature flag) | Phase 3 | **Resolved 2026-05-14** | Daniel | Per-org configurable, default off. New `org_settings.vector_dedup_enabled` boolean column. Dev seed enables it for the ATD-internal org. |
 | `BL-007` | Embedding model for `pgvector` dedup (Gemini, Vertex AI, OpenAI, etc.) | Phase 3 | **Resolved 2026-05-14** | Daniel | OpenAI `text-embedding-3-large` truncated to 1536 dims via the `dimensions` API parameter (Matryoshka). Fits standard pgvector HNSW index ceiling; reversible to `halfvec(3072)` if recall demands. |
-| `BL-008` | Linear API key + team ID provisioned for `dev` and `prod` environments | Phase 4 | Open | Daniel | — |
+| `BL-008` | Linear API key + team ID provisioned for `dev` and `prod` environments | Phase 4 | **Resolved 2026-05-16** | Daniel | Team ID locked in `AGENTS.md` §8 (`AIR`, `c66f57f7-2728-4ea5-86e0-dc6f7907a869`). API key provisioned per environment and supplied via the `LINEAR_API_KEY` env var (see `.env.local.example`). |
 | `BL-009` | Email provider (Resend, Postmark, ACS, SendGrid, etc.) | Phase 6 | Open | Daniel | — |
 | `BL-010` | Email sending domain + DNS records (SPF, DKIM, DMARC) | Phase 6 | Open | Daniel | — |
 | `BL-011` | Customer-relevant Linear status-transition subset (which transitions trigger an email) | Phase 6 | Open | Daniel + ATD leads | — |
@@ -258,20 +258,20 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Prerequisites:**
 
-- [ ] Phase 2 complete.
-- [ ] `BL-008` (Linear API key + team ID provisioned) resolved.
+- [x] Phase 2 complete.
+- [x] `BL-008` (Linear API key + team ID provisioned) resolved.
 
 **Execution checklist:**
 
-- [ ] Add `@linear/sdk` to dependencies.
-- [ ] Create `services/providers/linear/` with `client.ts` (SDK wrapper) and `LinearProvider.ts` (Protocol-style interface).
-- [ ] Implement `createIssue`, `updateIssue`, `getIssue`, and `verifyWebhookSignature` helper methods on the Provider (verify helper used by Phase 5).
-- [ ] Create `services/features/linear-sync/` with `pushTicket.ts` and field-mapping logic per the architecture doc's mapping table.
-- [ ] Wire `pushTicket` into the triage pipeline as step 6 (inline, after persist).
-- [ ] Persist `linear_issue_id` on the ticket row; emit `ticket_events.pushed_to_linear`.
-- [ ] Add transient-failure retry semantics (don't fail the whole submission if Linear is briefly unavailable; flag the ticket for retry).
-- [ ] Tests: success, transient failure with retry, hard failure with manual-retry path, field-mapping correctness.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Add `@linear/sdk` to dependencies.
+- [x] Create `services/providers/linear/` with `client.ts` (SDK wrapper) and `index.ts` (LinearProvider interface).
+- [x] Implement `createIssue`, `getIssue`, and `verifyWebhookSignature` helper methods on the Provider (verify helper used by Phase 5). *(updateIssue deferred to Phase 5 — webhook handler is the only updater in v1.)*
+- [x] Create `services/features/linear-sync/` with `pushTicket.ts` and field-mapping logic per the architecture doc's mapping table.
+- [x] Wire `pushTicket` into the triage pipeline as step 6 (inline, after persist).
+- [x] Persist `linear_issue_id` on the ticket row; emit `ticket_events.pushed_to_linear`.
+- [x] Add transient-failure retry semantics (don't fail the whole submission if Linear is briefly unavailable; flag the ticket for retry via the existing retry dispatcher branch `status='triaged' && linear_issue_id IS NULL`).
+- [x] Tests: success, transient failure with retry, hard failure with manual-retry path, field-mapping correctness.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 

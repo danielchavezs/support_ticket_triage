@@ -29,6 +29,7 @@ import {
 } from '@/services/features/tickets/schemas';
 import { triageTicketFeature } from '@/services/features/triage/triageTicket';
 import { dedupTicketFeature } from '@/services/features/dedup/dedupTicket';
+import { pushTicketToLinearFeature } from '@/services/features/linear-sync/pushTicket';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
 export type { NewTicketInput } from '@/services/features/tickets/schemas';
@@ -119,6 +120,24 @@ export async function createTicketFeature(input: NewTicketInput): Promise<Featur
   // ticket itself is still created successfully, so the API returns 201.
   // The retry endpoint can resume the failed ticket later.
   const triage = await triageTicketFeature({ orgId: created.org_id, ticketId: created.id });
+
+  // Inline Linear push (step 6, Phase 4). Runs only when triage succeeded
+  // and produced a `triaged` row. Linear errors do NOT roll back triage —
+  // the row stays `triaged` with `linear_issue_id IS NULL` and the retry
+  // dispatcher resumes from that gap. We return whichever row state is
+  // most up-to-date.
+  if (triage.success && triage.data.status === 'triaged') {
+    const push = await pushTicketToLinearFeature({
+      orgId: triage.data.org_id,
+      ticketId: triage.data.id,
+    });
+    if (push.success) return ok(push.data.ticket);
+    console.error(
+      `Linear push failed (recoverable via retry): ${push.error.code} ${push.error.message}`,
+    );
+    return ok(triage.data);
+  }
+
   if (triage.success) return ok(triage.data);
 
   try {
@@ -166,12 +185,21 @@ export async function getTicketFeature(input: {
  *                                            transient error and was logged-
  *                                            and-skipped.
  *   3. `type IS NULL` OR `status='failed'` → re-run triage. Phase 2 semantics
- *                                            preserved.
- *   4. Anything else                       → idempotent no-op.
+ *                                            preserved. On success, fall
+ *                                            through to the Linear-push
+ *                                            branch below so the freshly
+ *                                            triaged ticket also lands in
+ *                                            Linear in the same call.
+ *   4. `status='triaged'`                  → re-run Linear push. Phase 4:
+ *      AND `linear_issue_id IS NULL`        covers the case where Linear was
+ *                                            briefly unavailable at create
+ *                                            time and the push was skipped.
+ *   5. Anything else                       → idempotent no-op.
  *
  * Why the order matters: a stale-duplicate state must be cleared before any
  * dedup/triage re-run runs, otherwise the dispatcher would see `status='duplicate'`
- * and treat it as a no-op forever.
+ * and treat it as a no-op forever. Linear push runs last because it depends
+ * on the triage result.
  */
 export async function retryTicketTriageFeature(input: {
   orgId: string;
@@ -252,11 +280,30 @@ export async function retryTicketTriageFeature(input: {
     }
   }
 
-  // Branch 3: triage retry (Phase 2 semantics).
+  // Branch 3: triage retry (Phase 2 semantics). On success, fall through to
+  // branch 4 so the Linear push happens in the same retry call when the
+  // ticket newly reaches `triaged` state.
   if (ticket.type == null || ticket.status === 'failed') {
-    return triageTicketFeature({ orgId: ticket.org_id, ticketId: ticket.id });
+    const triage = await triageTicketFeature({ orgId: ticket.org_id, ticketId: ticket.id });
+    if (!triage.success) return triage;
+    ticket = triage.data;
   }
 
-  // Branch 4: idempotent no-op.
+  // Branch 4: Linear-push retry (Phase 4). Covers the case where the
+  // outbound push hit a transient failure at create time.
+  if (ticket.status === 'triaged' && ticket.linear_issue_id == null) {
+    const push = await pushTicketToLinearFeature({
+      orgId: ticket.org_id,
+      ticketId: ticket.id,
+    });
+    if (!push.success) {
+      // Stay recoverable: surface the ticket's current row state to the
+      // caller, but report the push failure code so operators can act.
+      return push;
+    }
+    return ok(push.data.ticket);
+  }
+
+  // Branch 5: idempotent no-op.
   return ok(ticket);
 }
