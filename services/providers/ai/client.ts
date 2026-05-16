@@ -5,7 +5,8 @@
  *
  * Two distinct provider integrations live here:
  *   - `getTriageModel()`     — Gemini, for structured ticket classification
- *                              (Phase 2). Uses `@ai-sdk/google`.
+ *                              (Phase 2) and tool-augmented classification
+ *                              (Phase 3.5). Uses `@ai-sdk/google`.
  *   - `getEmbeddingModel()`  — OpenAI, for `text-embedding-3-large` truncated
  *                              to 1536 dims (Phase 3, BL-007). Uses
  *                              `@ai-sdk/openai`.
@@ -14,12 +15,20 @@
  * be imported in contexts where the API key may not yet be loaded — e.g.,
  * Next.js build steps that traverse modules statically. Each throws with a
  * clear error if its key is missing when actually invoked.
+ *
+ * Model rationale (Phase 3.5): the default is `gemini-3-flash-preview`. The
+ * upgrade from `gemini-2.5-flash-lite` unlocks the stronger tool-use surface
+ * that the Phase 3.5 bounded tool-loop relies on. See
+ * `docs/DC/P3.5-tool-augmented-classification-plan.md` for the full rationale
+ * and verification against `@ai-sdk/google` 3.0.21's `GoogleGenerativeAIModelId`
+ * union. The `AI_MODEL` env var remains the escape hatch if Google ships a
+ * different canonical identifier.
  */
 
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 
-export const DEFAULT_MODEL_ID = 'gemini-2.5-flash-lite';
+export const DEFAULT_MODEL_ID = 'gemini-3-flash-preview';
 export const DEFAULT_EMBEDDING_MODEL_ID = 'text-embedding-3-large';
 export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 

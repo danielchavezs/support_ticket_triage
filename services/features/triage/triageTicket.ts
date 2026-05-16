@@ -1,22 +1,34 @@
 /**
  * Triage Feature — orchestrator for steps 3–5 of the architecture pipeline.
  *
- * Responsibilities:
- *   1. Fetch the ticket (org-scoped).
- *   2. Call the AI Provider for classification.
- *   3. Re-parse the result with Zod (defense-in-depth against any future
- *      Provider that doesn't enforce the schema upstream).
- *   4. Compute deterministic `priority` via the locked matrix.
- *   5. Persist via `tickets.updateTriage` and emit `ticket_events.triaged`.
+ * Phase 3.5 wires the classification step to a bounded tool loop:
  *
- * On any failure (AI error, schema mismatch, DB write), the ticket is left
- * in a recoverable state: `status='failed'` with `triage_error` set, and a
- * `ticket_events.failed` event is emitted. The caller (`tickets.retry`)
- * can re-invoke this Feature to resume.
+ *   1. Fetch the ticket (org-scoped).
+ *   2. Build the read-only tool set bound to the ticket's `org_id`,
+ *      `user_id`, `subject`, `description` (see
+ *      `services/features/triage/tools.ts`).
+ *   3. First attempt: `ai.classifyTicketWithTools(...)` runs the bounded
+ *      loop with `MAX_TOOL_ROUNDS` rounds and `TOOL_LOOP_DEADLINE_MS` wall
+ *      clock budget. On success, defense-in-depth Zod re-parse the result.
+ *   4. Single-shot fallback: on timeout / hard error / Zod re-parse failure
+ *      on the tool-loop result, invoke the legacy `ai.classifyTicket(...)`
+ *      path. The fallback uses no tools and is the same code that ran in
+ *      Phases 2–3, so the pipeline always lands either `triaged` or
+ *      `failed` regardless of tool-loop health.
+ *   5. Compute deterministic `priority` via the locked matrix; persist via
+ *      `tickets.updateTriage`; emit `ticket_events.triaged`.
+ *      `payload.tool_calls` carries the per-call audit on the tool-loop
+ *      path; `payload.fallback = 'single_shot'` is set on the fallback path.
+ *
+ * On any double-failure (both tool-loop + single-shot reject, or a final
+ * Zod re-parse rejection on the single-shot result), the ticket is left in
+ * a recoverable state: `status='failed'` with `triage_error` set, and a
+ * `ticket_events.failed` event is emitted. The retry endpoint can re-invoke
+ * this Feature to resume.
  *
  * Event emission is best-effort: a failed `ticket_events` insert logs but
- * does not roll back the triage write. The ticket row state is the source
- * of truth; the event log is observability.
+ * does not roll back the triage write. The ticket row is the source of
+ * truth; the event log is observability.
  */
 
 import { fail, ok, type FeatureResult } from '@/services/features/types';
@@ -24,9 +36,27 @@ import { server as sources } from '@/services/providers/supabase/server';
 import { ai } from '@/services/providers/ai';
 import { TicketScopedInputSchema } from '@/services/features/tickets/schemas';
 import { isLowConfidence } from '@/services/features/triage/confidence';
+import {
+  MAX_TOOL_ROUNDS,
+  TOOL_LOOP_DEADLINE_MS,
+} from '@/services/features/triage/config';
 import { priorityForTypeSeverity } from '@/services/features/triage/priorityMatrix';
-import { TriageClassificationSchema } from '@/services/features/triage/schemas';
+import {
+  TriageClassificationSchema,
+  type TriageClassification,
+} from '@/services/features/triage/schemas';
+import {
+  buildTriageTools,
+  summarizeSteps,
+  type ToolCallAudit,
+} from '@/services/features/triage/tools';
 import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
+import type { Json } from '@/assets/databaseTypes';
+
+type ClassifyOutcome =
+  | { kind: 'tool_loop'; classification: TriageClassification; toolCalls: ToolCallAudit[] }
+  | { kind: 'single_shot'; classification: TriageClassification }
+  | { kind: 'failure'; message: string };
 
 export async function triageTicketFeature(input: {
   orgId: string;
@@ -47,24 +77,12 @@ export async function triageTicketFeature(input: {
   }
   if (!ticket) return fail('TICKET_NOT_FOUND', 'Ticket not found.');
 
-  let raw: unknown;
-  try {
-    raw = await ai.classifyTicket({
-      subject: ticket.subject,
-      description: ticket.description,
-      schema: TriageClassificationSchema,
-    });
-  } catch (err) {
-    return persistFailure(orgId, ticketId, errorMessage(err));
+  const outcome = await classify(ticket);
+  if (outcome.kind === 'failure') {
+    return persistFailure(orgId, ticketId, outcome.message);
   }
 
-  const validation = TriageClassificationSchema.safeParse(raw);
-  if (!validation.success) {
-    const issue = validation.error.issues[0]?.message ?? 'Invalid AI response shape.';
-    return persistFailure(orgId, ticketId, `Schema validation failed: ${issue}`);
-  }
-  const classification = validation.data;
-
+  const { classification } = outcome;
   const priority = priorityForTypeSeverity(classification.severity, classification.type);
 
   let updated: TicketRow;
@@ -87,24 +105,88 @@ export async function triageTicketFeature(input: {
     return persistFailure(orgId, ticketId, errorMessage(err));
   }
 
+  const eventPayload: Record<string, Json> = {
+    type: classification.type,
+    severity: classification.severity,
+    priority,
+    confidence: classification.confidence,
+    needs_human_triage: isLowConfidence(classification.confidence),
+    tool_calls: outcome.kind === 'tool_loop' ? (outcome.toolCalls as unknown as Json) : ([] as unknown as Json),
+  };
+  if (outcome.kind === 'single_shot') {
+    eventPayload.fallback = 'single_shot';
+  }
+
   try {
     await sources.ticketEvents.create({
       orgId,
       ticketId,
       eventType: 'triaged',
-      payload: {
-        type: classification.type,
-        severity: classification.severity,
-        priority,
-        confidence: classification.confidence,
-        needs_human_triage: isLowConfidence(classification.confidence),
-      },
+      payload: eventPayload,
     });
   } catch (err) {
     console.error('ticket_events.triaged emission failed (non-fatal):', err);
   }
 
   return ok(updated);
+}
+
+async function classify(ticket: TicketRow): Promise<ClassifyOutcome> {
+  const tools = buildTriageTools({
+    ticketId: ticket.id,
+    orgId: ticket.org_id,
+    userId: ticket.user_id,
+    subject: ticket.subject,
+    description: ticket.description,
+  });
+
+  // Stage 1: bounded tool loop. On any rejection or Zod re-parse failure,
+  // drop to the single-shot fallback.
+  try {
+    const { result, steps } = await ai.classifyTicketWithTools({
+      subject: ticket.subject,
+      description: ticket.description,
+      schema: TriageClassificationSchema,
+      tools,
+      maxSteps: MAX_TOOL_ROUNDS,
+      timeoutMs: TOOL_LOOP_DEADLINE_MS,
+    });
+
+    const validation = TriageClassificationSchema.safeParse(result);
+    if (validation.success) {
+      return {
+        kind: 'tool_loop',
+        classification: validation.data,
+        toolCalls: summarizeSteps(steps),
+      };
+    }
+    console.error(
+      'Triage: tool-loop result failed defense-in-depth Zod re-parse; falling back to single-shot:',
+      validation.error.issues[0]?.message,
+    );
+  } catch (err) {
+    console.error('Triage: tool-loop classification failed; falling back to single-shot:', err);
+  }
+
+  // Stage 2: single-shot fallback. Same path as Phases 2–3.
+  let raw: unknown;
+  try {
+    raw = await ai.classifyTicket({
+      subject: ticket.subject,
+      description: ticket.description,
+      schema: TriageClassificationSchema,
+    });
+  } catch (err) {
+    return { kind: 'failure', message: errorMessage(err) };
+  }
+
+  const validation = TriageClassificationSchema.safeParse(raw);
+  if (!validation.success) {
+    const issue = validation.error.issues[0]?.message ?? 'Invalid AI response shape.';
+    return { kind: 'failure', message: `Schema validation failed: ${issue}` };
+  }
+
+  return { kind: 'single_shot', classification: validation.data };
 }
 
 async function persistFailure(

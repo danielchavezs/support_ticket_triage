@@ -106,6 +106,38 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
     },
 
     /**
+     * List non-deleted tickets for a specific user inside an org, newest first.
+     *
+     * Phase 3.5 consumer: the `getRecentUserTickets` triage tool reads the
+     * submitter's recent history to ground the classifier. Both org and user
+     * predicates are mandatory — there is no read-only "recent tickets"
+     * surface for the App layer, and the tool factory binds both ids from
+     * its context closure rather than accepting them from the agent.
+     */
+    async listByUser({
+      orgId,
+      userId,
+      limit,
+    }: {
+      orgId: string;
+      userId: string;
+      limit: number;
+    }): Promise<TicketRow[]> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('*')
+        .eq('org_id', orgId)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+      return (data ?? []) as TicketRow[];
+    },
+
+    /**
      * Insert a new ticket. Triage fields are left null; Phase 2 backfills via
      * `updateTriage`. The composite FK on `(user_id, org_id)` rejects the
      * insert at the DB layer if the user does not belong to the org.

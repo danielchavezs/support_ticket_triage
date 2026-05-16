@@ -242,8 +242,8 @@ The classification step is bounded-agentic, not free-roaming. Strict invariants:
 
 - **No write tools.** Persistence, dedup hard-link, priority assignment, Linear push, email, and event emission all run as deterministic code outside the model loop. The model only classifies.
 - **Read-only context tools.** The model has access to:
-  - `findSimilarTicketsForContext({ limit? })` — top-K nearest tickets by cosine similarity over `description_embedding`, scoped to the calling org. Reuses Phase 3's `find_similar_tickets` Postgres function with its own threshold; does not commit any dedup linkage.
-  - `getRecentUserTickets({ limit? })` — the submitting user's recent tickets in the same org, newest first.
+  - `findSimilarTicketsForContext({ limit? })` — top-K nearest tickets by cosine similarity over `description_embedding`, scoped to the calling org. Reuses Phase 3's `find_similar_tickets` Postgres function with its own threshold; does not commit any dedup linkage. The current ticket is filtered out of the result so the model never sees itself as a similar match (dedup persists the current ticket's embedding before triage runs, so the RPC otherwise returns it as the top hit).
+  - `getRecentUserTickets({ limit? })` — the submitting user's recent tickets in the same org, newest first. The current ticket is filtered out so the tool returns prior history, not the in-flight submission.
   - *(Deferred to Phase 4)* `getActiveLinearIssues({ ... })` — added alongside the Linear Provider.
 - **Org/user scoping is non-negotiable.** Tool input schemas do not accept `orgId` or `userId`. Both are bound from the request-context closure when the tool is constructed, so the agent has no way to query a different org or user.
 - **Bounded loop.** Maximum 4 tool-call rounds (`stopWhen: stepCountIs(4)`); maximum 15s wall clock via SDK timeout / abort signal. On budget exceed or hard error, the Provider falls back once to the single-shot `generateObject` path. The ticket always lands either `triaged` or `failed` — fallback never blocks the pipeline.

@@ -9,15 +9,22 @@ import {
   getEmbeddingModel,
   getTriageModel,
 } from '@/services/providers/ai/client';
-import { embed, generateObject } from 'ai';
+import { embed, generateObject, generateText, Output, stepCountIs } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { z } from 'zod';
 
-vi.mock('ai', () => ({
-  embed: vi.fn(),
-  generateObject: vi.fn(),
-}));
+vi.mock('ai', () => {
+  const objectMarker = (spec: unknown) => ({ kind: 'output.object', spec });
+  const stepCountIsMarker = (n: number) => ({ kind: 'stop.stepCountIs', n });
+  return {
+    embed: vi.fn(),
+    generateObject: vi.fn(),
+    generateText: vi.fn(),
+    stepCountIs: vi.fn(stepCountIsMarker),
+    Output: { object: vi.fn(objectMarker) },
+  };
+});
 
 vi.mock('@ai-sdk/google', () => ({
   createGoogleGenerativeAI: vi.fn(() => {
@@ -159,6 +166,126 @@ describe('ai.classifyTicket', () => {
     await expect(
       ai.classifyTicket({ subject: 'x', description: 'y', schema: TestClassificationSchema }),
     ).rejects.toThrow('API rate limit');
+  });
+});
+
+describe('ai.classifyTicketWithTools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'test-key';
+  });
+
+  afterEach(() => {
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = ENV_BACKUP.GOOGLE_GENERATIVE_AI_API_KEY;
+  });
+
+  const buildTools = () => ({
+    findSimilarTicketsForContext: {
+      description: 'fake tool',
+      // The Zod input shape is irrelevant here — the AI Provider forwards
+      // tools opaquely; the mock just needs an object the assertions can
+      // compare by reference.
+      inputSchema: z.object({}),
+      execute: vi.fn().mockResolvedValue([]),
+    },
+  });
+
+  it('forwards tools, stopWhen, and Output.object; returns { result, steps }', async () => {
+    const generateTextMock = generateText as unknown as MockedFunction<typeof generateText>;
+    const fakeClassification = {
+      type: 'bug' as const,
+      severity: 'major' as const,
+      customer_facing_summary: 'Cannot log in.',
+      suggested_reply: 'Thanks — investigating.',
+      confidence: 0.88,
+    };
+    const fakeSteps = [{ toolCalls: [], toolResults: [] }] as unknown as ReturnType<
+      typeof generateText
+    > extends Promise<{ steps: infer S }>
+      ? S
+      : never;
+    generateTextMock.mockResolvedValue({
+      output: fakeClassification,
+      steps: fakeSteps,
+    } as unknown as Awaited<ReturnType<typeof generateText>>);
+
+    const tools = buildTools();
+    const { result, steps } = await ai.classifyTicketWithTools({
+      subject: 'SSO broken',
+      description: 'Redirect loop after login.',
+      schema: TestClassificationSchema,
+      tools,
+      maxSteps: 4,
+      timeoutMs: 15000,
+    });
+
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    const callArg = generateTextMock.mock.calls[0][0] as unknown as {
+      model: unknown;
+      system: string;
+      prompt: string;
+      tools: unknown;
+      stopWhen: { kind: string; n: number };
+      output: { kind: string; spec: { schema: unknown } };
+      timeout: number;
+    };
+    expect(callArg.model).toBeDefined();
+    expect(callArg.system).toContain('classify');
+    expect(callArg.prompt).toContain('SSO broken');
+    expect(callArg.prompt).toContain('Redirect loop');
+    expect(callArg.tools).toBe(tools);
+    expect(stepCountIs).toHaveBeenCalledWith(4);
+    expect(callArg.stopWhen).toEqual({ kind: 'stop.stepCountIs', n: 4 });
+    expect(Output.object).toHaveBeenCalledWith({ schema: TestClassificationSchema });
+    expect(callArg.output).toEqual({
+      kind: 'output.object',
+      spec: { schema: TestClassificationSchema },
+    });
+    expect(callArg.timeout).toBe(15000);
+
+    expect(result).toEqual(fakeClassification);
+    expect(steps).toBe(fakeSteps);
+  });
+
+  it('omits the timeout option when timeoutMs is undefined', async () => {
+    const generateTextMock = generateText as unknown as MockedFunction<typeof generateText>;
+    generateTextMock.mockResolvedValue({
+      output: {
+        type: 'bug',
+        severity: 'minor',
+        customer_facing_summary: 'x',
+        suggested_reply: 'y',
+        confidence: 0.5,
+      },
+      steps: [],
+    } as unknown as Awaited<ReturnType<typeof generateText>>);
+
+    await ai.classifyTicketWithTools({
+      subject: 'x',
+      description: 'y',
+      schema: TestClassificationSchema,
+      tools: buildTools(),
+      maxSteps: 4,
+    });
+
+    const callArg = generateTextMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(callArg, 'timeout')).toBe(false);
+  });
+
+  it('propagates SDK errors raw (Feature layer normalizes)', async () => {
+    const generateTextMock = generateText as unknown as MockedFunction<typeof generateText>;
+    generateTextMock.mockRejectedValue(new Error('Tool loop deadline exceeded'));
+
+    await expect(
+      ai.classifyTicketWithTools({
+        subject: 'x',
+        description: 'y',
+        schema: TestClassificationSchema,
+        tools: buildTools(),
+        maxSteps: 4,
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow('Tool loop deadline exceeded');
   });
 });
 

@@ -27,7 +27,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 - [x] **Phase 1** — Org/User Schema, Enums, RLS
 - [x] **Phase 2** — Triage Pipeline Refactor
 - [x] **Phase 3** — Deduplication (deterministic + vector)
-- [ ] **Phase 3.5** — Tool-Augmented Classification
+- [x] **Phase 3.5** — Tool-Augmented Classification
 - [ ] **Phase 4** — Linear Outbound (push)
 - [ ] **Phase 5** — Linear Inbound Webhook
 - [ ] **Phase 6** — Email Notifications
@@ -214,27 +214,27 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Bump `DEFAULT_MODEL_ID` in `services/providers/ai/client.ts` from `gemini-2.5-flash-lite` to `gemini-3-flash-preview`. Update `.env.local.example` comment. Verify the identifier against `@ai-sdk/google` 3.0.21; `AI_MODEL` env override absorbs any vendor-side identifier drift.
-- [ ] Add `classifyTicketWithTools<T>` to `services/providers/ai/index.ts`. Uses `generateText` with `tools` + `output: Output.object({ schema })` + `stopWhen: stepCountIs(maxSteps)`. Returns `{ result: T; steps: StepResult[] }`. Provider remains schema-agnostic (no imports from `services/features/`). Existing `classifyTicket<T>` (single-shot) is retained as the fallback path.
-- [ ] Add `listByUser({ orgId, userId, limit })` to `services/providers/supabase/domains/tickets.ts`. Org + user predicates, soft-delete filter, ordered `created_at DESC`. Provider-domain test for the predicates.
-- [ ] Create `services/features/triage/tools.ts` exporting `buildTriageTools(ctx)` where `ctx = { orgId, userId, subject, description }`. Tools:
+- [x] Bump `DEFAULT_MODEL_ID` in `services/providers/ai/client.ts` from `gemini-2.5-flash-lite` to `gemini-3-flash-preview`. Update `.env.local.example` comment. Verify the identifier against `@ai-sdk/google` 3.0.21; `AI_MODEL` env override absorbs any vendor-side identifier drift.
+- [x] Add `classifyTicketWithTools<T>` to `services/providers/ai/index.ts`. Uses `generateText` with `tools` + `output: Output.object({ schema })` + `stopWhen: stepCountIs(maxSteps)`. Returns `{ result: T; steps: StepResult[] }`. Provider remains schema-agnostic (no imports from `services/features/`). Existing `classifyTicket<T>` (single-shot) is retained as the fallback path.
+- [x] Add `listByUser({ orgId, userId, limit })` to `services/providers/supabase/domains/tickets.ts`. Org + user predicates, soft-delete filter, ordered `created_at DESC`. Provider-domain test for the predicates.
+- [x] Create `services/features/triage/tools.ts` exporting `buildTriageTools(ctx)` where `ctx = { orgId, userId, subject, description }`. Tools:
   - `findSimilarTicketsForContext({ limit?: number = 5 })` — memoizes one embedding via `ai.generateEmbedding`, calls `sources.dedupSignatures.findSimilarTickets`, hydrates each hit via `sources.tickets.getById`, returns top-K with `{ ticketId, similarity, type, severity, status, subjectPreview }`.
   - `getRecentUserTickets({ limit?: number = 5 })` — calls `sources.tickets.listByUser`, returns recent rows with the same preview shape (minus `similarity`, plus `createdAt`).
   - Tool `inputSchema` does **not** include `orgId` / `userId`; both are bound from the context closure so the agent cannot cross orgs.
-- [ ] Create `services/features/triage/config.ts` exporting `MAX_TOOL_ROUNDS = 4`, `TOOL_LOOP_DEADLINE_MS = 15000`, and `CONTEXT_SIMILARITY_THRESHOLD = 0.7`.
-- [ ] Rewire `services/features/triage/triageTicket.ts`:
+- [x] Create `services/features/triage/config.ts` exporting `MAX_TOOL_ROUNDS = 4`, `TOOL_LOOP_DEADLINE_MS = 15000`, and `CONTEXT_SIMILARITY_THRESHOLD = 0.7`.
+- [x] Rewire `services/features/triage/triageTicket.ts`:
   - Build tools with the ticket's `org_id`, `user_id`, `subject`, `description`.
   - First attempt: `ai.classifyTicketWithTools(...)` runs with `TOOL_LOOP_DEADLINE_MS` enforced via SDK timeout / abort signal.
   - On success: defense-in-depth Zod re-parse, persist via existing `tickets.updateTriage`, emit `triaged` event with `payload.tool_calls = summarizeSteps(result.steps)` where each entry is `{ name, input, durationMs, ok }` (outputs are not stored).
   - On timeout or hard error: invoke existing `ai.classifyTicket(...)` (no tools). On success: persist + emit `triaged` with `payload.tool_calls = []` and `payload.fallback = 'single_shot'`. On second failure: existing `persistFailure(...)` path.
-- [ ] Tests:
+- [x] Tests:
   - New `tests/unit/triageTools.test.ts` — tool wrappers inject context, ignore agent-passed org/user, memoize the embedding within a single `buildTriageTools` invocation.
   - New `tests/unit/ticketsListByUser.test.ts` (or extend `orgsUsersDomains.test.ts`) — Provider-domain test for the org + user predicates and soft-delete filter.
   - Extend `tests/unit/aiProvider.test.ts` — covers `classifyTicketWithTools` forwarding `tools`, `stopWhen`, `output` and returning `{ result, steps }`.
   - Extend `tests/unit/triageTicket.test.ts` — zero-tool happy path, tool-use happy path with `tool_calls` in event payload, tool-loop timeout → single-shot fallback runs with `payload.fallback === 'single_shot'`, tool-loop + fallback both fail → existing failure-state path.
-- [ ] Update `docs/DC/airiam-ticket-triage-architecture.md`: Pipeline step 3 rewritten for the bounded tool-loop with single-shot fallback. Add a "Triage Tool Surface" subsection covering the two tools, guardrails, audit shape, and the "no write tools" invariant.
-- [ ] Update this roadmap: check the Phase 3.5 box in the Master Progress Checklist in the same PR that lands the wiring.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass; coverage stays at or above 80% on every metric.
+- [x] Update `docs/DC/airiam-ticket-triage-architecture.md`: Pipeline step 3 rewritten for the bounded tool-loop with single-shot fallback. Add a "Triage Tool Surface" subsection covering the two tools, guardrails, audit shape, and the "no write tools" invariant.
+- [x] Update this roadmap: check the Phase 3.5 box in the Master Progress Checklist in the same PR that lands the wiring.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass; coverage stays at or above 80% on every metric.
 
 **Deferred (post-MVP or folded into later phases):**
 

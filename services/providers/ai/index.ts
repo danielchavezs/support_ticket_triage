@@ -1,22 +1,42 @@
 'server-only';
 
 /**
- * AI Provider — two-method adapter for ticket classification (Gemini) and
- * vector embedding (OpenAI).
+ * AI Provider — adapter for ticket classification (Gemini) and vector
+ * embedding (OpenAI).
  *
  * The Provider stays narrow: each method maps 1:1 to an underlying SDK call.
  * Schemas (for classification) and validation (for embedding dimension) live
  * in the Feature layer or here as small invariants; the Provider itself never
  * depends on Feature-layer types.
  *
+ * Phase 3.5 adds `classifyTicketWithTools<T>` alongside the existing
+ * single-shot `classifyTicket<T>`. The tool-loop variant exposes the AI SDK's
+ * `generateText` + `Output.object` + `stopWhen` surface to the Feature layer
+ * without leaking SDK types upstream; the schema, the `ToolSet`, and the loop
+ * budget are all caller-supplied. The Provider remains schema-agnostic and
+ * does not import from `services/features/`.
+ *
  * Errors propagate raw — the Feature layer normalizes them to `FeatureError`
  * per `AGENTS.md` §6.
  */
 
-import { embed, generateObject } from 'ai';
+import {
+  embed,
+  generateObject,
+  generateText,
+  Output,
+  stepCountIs,
+  type StepResult,
+  type ToolSet,
+} from 'ai';
 import type { z } from 'zod';
 
 import { getEmbeddingModel, getTriageModel } from '@/services/providers/ai/client';
+
+export type ClassifyTicketWithToolsResult<T> = {
+  result: T;
+  steps: StepResult<ToolSet>[];
+};
 
 export type AiProvider = {
   classifyTicket: <T>(input: {
@@ -24,6 +44,14 @@ export type AiProvider = {
     description: string;
     schema: z.ZodType<T>;
   }) => Promise<T>;
+  classifyTicketWithTools: <T>(input: {
+    subject: string;
+    description: string;
+    schema: z.ZodType<T>;
+    tools: ToolSet;
+    maxSteps: number;
+    timeoutMs?: number;
+  }) => Promise<ClassifyTicketWithToolsResult<T>>;
   generateEmbedding: (text: string) => Promise<number[]>;
 };
 
@@ -47,7 +75,18 @@ Guidance:
   understand; no internal jargon, no PII reproduction.
 - "suggested_reply": a short, polite acknowledgement the user could send to
   the submitter; do not promise timelines or escalation.
-- "confidence": your self-rated confidence in the classification (0..1).`;
+- "confidence": your self-rated confidence in the classification (0..1).
+
+Tool use (Phase 3.5):
+- When tools are available, they are read-only helpers for grounding your
+  judgement in this org's local context (similar past tickets, the
+  submitter's recent history). Tool results are advisory, not exhaustive —
+  do not assume an empty result means no such ticket exists.
+- Use a tool only when the subject or description is ambiguous and local
+  context could change your answer. If you are already confident, produce
+  the schema directly with zero tool calls.
+- Never assume tool outputs are exhaustive, and never invoke a tool more
+  than necessary; the loop budget is finite.`;
 
 export const ai: AiProvider = {
   async classifyTicket({ subject, description, schema }) {
@@ -59,6 +98,27 @@ export const ai: AiProvider = {
       prompt: `Subject:\n${subject}\n\nDescription:\n${description}`,
     });
     return result.object;
+  },
+
+  async classifyTicketWithTools({
+    subject,
+    description,
+    schema,
+    tools,
+    maxSteps,
+    timeoutMs,
+  }) {
+    const model = getTriageModel();
+    const result = await generateText({
+      model,
+      system: SYSTEM_PROMPT,
+      prompt: `Subject:\n${subject}\n\nDescription:\n${description}`,
+      tools,
+      stopWhen: stepCountIs(maxSteps),
+      output: Output.object({ schema }),
+      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+    });
+    return { result: result.output, steps: result.steps };
   },
 
   async generateEmbedding(text) {
