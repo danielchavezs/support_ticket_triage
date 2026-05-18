@@ -197,6 +197,62 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
     },
 
     /**
+     * Look up a ticket by its Linear issue UUID. Used by the Phase 5 inbound
+     * webhook handler, which has no `orgId` context at lookup time — the
+     * webhook only carries the Linear issue ID. The partial-unique index on
+     * `linear_issue_id` (Phase 1, see migration 05) makes this globally
+     * unique, so there's no ambiguity in the absence of an org predicate.
+     *
+     * Returns null when the issue has no matching ticket (typical when an
+     * issue was created in Linear directly, not pushed by us).
+     */
+    async findByLinearIssueId(linearIssueId: string): Promise<TicketRow | null> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('*')
+        .eq('linear_issue_id', linearIssueId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (error) throw error;
+      return (data ?? null) as TicketRow | null;
+    },
+
+    /**
+     * Apply a Linear state transition to a ticket (Phase 5). Always updates
+     * `linear_state` (free-form text); optionally also flips `status` (e.g.,
+     * to `'closed'` when Linear reports a terminal state).
+     */
+    async updateLinearState({
+      orgId,
+      ticketId,
+      linearState,
+      status,
+    }: {
+      orgId: string;
+      ticketId: string;
+      linearState: string;
+      status?: TicketStatus;
+    }): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+      const patch: TablesUpdate<'tickets'> = { linear_state: linearState };
+      if (status !== undefined) {
+        patch.status = status;
+      }
+      const { data, error } = await supabase
+        .from('tickets')
+        .update(patch)
+        .eq('id', ticketId)
+        .eq('org_id', orgId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    /**
      * Persist the Linear issue ID after a successful outbound push (Phase 4).
      *
      * Phase 4 invariants:

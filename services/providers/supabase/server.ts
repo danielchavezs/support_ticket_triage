@@ -23,6 +23,10 @@ import {
   makeDedupSignatures,
   type DedupSignaturesSource,
 } from '@/services/providers/supabase/domains/dedupSignatures';
+import {
+  makeWebhookDeliveries,
+  type WebhookDeliveriesSource,
+} from '@/services/providers/supabase/domains/webhookDeliveries';
 
 export type ServerSources = {
   tickets: TicketsSource;
@@ -31,6 +35,7 @@ export type ServerSources = {
   ticketEvents: TicketEventsSource;
   orgSettings: OrgSettingsSource;
   dedupSignatures: DedupSignaturesSource;
+  webhookDeliveries: WebhookDeliveriesSource;
 };
 
 export function wireServer(): ServerSources {
@@ -42,6 +47,7 @@ export function wireServer(): ServerSources {
     ticketEvents: makeTicketEvents(getClient),
     orgSettings: makeOrgSettings(getClient),
     dedupSignatures: makeDedupSignatures(getClient),
+    webhookDeliveries: makeWebhookDeliveries(getClient),
   };
 }
 

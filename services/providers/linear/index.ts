@@ -50,6 +50,14 @@ export type LinearIssueLookup = {
   stateName: string;
 };
 
+/**
+ * Parsed webhook payload as surfaced by `LinearWebhookClient.parseData`.
+ * Returned as `unknown` from the Provider: the Feature layer validates the
+ * exact shape it cares about with Zod, so the Provider stays narrow and
+ * doesn't leak SDK internals.
+ */
+export type LinearWebhookParsedPayload = unknown;
+
 export type LinearProvider = {
   createIssue(input: LinearCreateIssueInput): Promise<LinearCreatedIssue>;
   getIssue(issueId: string): Promise<LinearIssueLookup | null>;
@@ -60,6 +68,17 @@ export type LinearProvider = {
     /** Optional override for unit tests; production reads `LINEAR_WEBHOOK_SECRET`. */
     secret?: string;
   }): boolean;
+  /**
+   * Verify the signature AND parse the JSON body in one call. Throws
+   * `LinearWebhookSignatureError` on signature failure; throws a plain
+   * `Error` on JSON parse failure (the Feature normalizes both).
+   */
+  parseWebhookPayload(input: {
+    rawBody: Buffer;
+    signature: string;
+    timestamp?: number | string;
+    secret?: string;
+  }): LinearWebhookParsedPayload;
 };
 
 export const linear: LinearProvider = {
@@ -126,6 +145,31 @@ export const linear: LinearProvider = {
       // layer can distinguish signature failures from network/SDK errors.
       const message = err instanceof Error ? err.message : String(err);
       throw new LinearWebhookSignatureError(message);
+    }
+  },
+
+  parseWebhookPayload({ rawBody, signature, timestamp, secret }) {
+    const client = getLinearWebhookClient(secret);
+    try {
+      // `parseData` verifies the signature and then JSON-parses the body.
+      // SDK semantics: on signature failure it throws; on JSON failure it
+      // also throws. We separate the two by attempting verify-only first
+      // so we can wrap signature failures specifically.
+      const verified = client.verify(rawBody, signature, timestamp);
+      if (!verified) {
+        throw new LinearWebhookSignatureError('Linear webhook signature verification returned false.');
+      }
+    } catch (err) {
+      if (err instanceof LinearWebhookSignatureError) throw err;
+      const message = err instanceof Error ? err.message : String(err);
+      throw new LinearWebhookSignatureError(message);
+    }
+
+    try {
+      return JSON.parse(rawBody.toString('utf8')) as LinearWebhookParsedPayload;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Linear webhook payload JSON parse failed: ${message}`);
     }
   },
 };

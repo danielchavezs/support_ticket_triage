@@ -217,3 +217,54 @@ describe('linear.verifyWebhookSignature', () => {
     expect(ok).toBe(true);
   });
 });
+
+describe('linear.parseWebhookPayload', () => {
+  it('verifies signature then JSON-parses the body', () => {
+    verifyMock.mockReturnValue(true);
+    const body = Buffer.from(JSON.stringify({ type: 'Issue', action: 'update' }));
+
+    const parsed = linear.parseWebhookPayload({
+      rawBody: body,
+      signature: 'sha256=ok',
+      timestamp: '2026-05-18T00:00:00Z',
+    });
+
+    expect(verifyMock).toHaveBeenCalledWith(body, 'sha256=ok', '2026-05-18T00:00:00Z');
+    expect(parsed).toEqual({ type: 'Issue', action: 'update' });
+  });
+
+  it('throws LinearWebhookSignatureError when verify returns false', () => {
+    verifyMock.mockReturnValue(false);
+
+    expect(() =>
+      linear.parseWebhookPayload({
+        rawBody: Buffer.from('{}'),
+        signature: 'sha256=bad',
+      }),
+    ).toThrow(LinearWebhookSignatureError);
+  });
+
+  it('throws LinearWebhookSignatureError when the SDK verify throws', () => {
+    verifyMock.mockImplementation(() => {
+      throw new Error('invalid timestamp');
+    });
+
+    expect(() =>
+      linear.parseWebhookPayload({
+        rawBody: Buffer.from('{}'),
+        signature: 'sha256=ok',
+      }),
+    ).toThrow(LinearWebhookSignatureError);
+  });
+
+  it('throws a plain Error on malformed JSON', () => {
+    verifyMock.mockReturnValue(true);
+
+    expect(() =>
+      linear.parseWebhookPayload({
+        rawBody: Buffer.from('not-json{'),
+        signature: 'sha256=ok',
+      }),
+    ).toThrow(/JSON parse failed/);
+  });
+});
