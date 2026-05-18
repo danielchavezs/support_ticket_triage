@@ -29,7 +29,7 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 - [x] **Phase 3** — Deduplication (deterministic + vector)
 - [x] **Phase 3.5** — Tool-Augmented Classification
 - [x] **Phase 4** — Linear Outbound (push)
-- [ ] **Phase 5** — Linear Inbound Webhook
+- [x] **Phase 5** — Linear Inbound Webhook
 - [ ] **Phase 6** — Email Notifications
 - [ ] **Phase 7** — Caller Authentication Hardening
 - [ ] **Phase 8** — CI/CD and Pre-Deploy Gates
@@ -287,25 +287,25 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Prerequisites:**
 
-- [ ] Phase 4 complete.
+- [x] Phase 4 complete.
 
 **Execution checklist:**
 
-- [ ] Create `app/api/linear/webhook/route.ts`. Capture raw body and signature headers; pass through to the Feature.
-- [ ] Create `services/features/linear-sync/handleWebhook.ts`.
-- [ ] Feature calls `LinearProvider.verifyWebhookSignature` before mutating state. On failure, return a `FeatureError` mapped to HTTP 401.
-- [ ] Lookup the ticket by `linear_issue_id`. If not found, log structured warning and return 200 (don't 404 — Linear retries).
-- [ ] Apply the status transition to the ticket row.
-- [ ] Emit `ticket_events.status_changed`.
-- [ ] Add `LINEAR_WEBHOOK_SECRET` to env var docs and `.env.local.example`.
-- [ ] Tests: signature pass, signature fail, unknown `linear_issue_id`, valid transition, duplicate delivery (idempotency on Linear's delivery-id header).
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Create `app/api/linear/webhook/route.ts`. Capture raw body and signature headers; pass through to the Feature.
+- [x] Create `services/features/linear-sync/handleWebhook.ts`.
+- [x] Feature calls `LinearProvider.verifyWebhookSignature` (via `parseWebhookPayload`) before mutating state. On failure, return a `FeatureError` mapped to HTTP 401.
+- [x] Lookup the ticket by `linear_issue_id`. If not found, log structured warning and return 200 (don't 404 — Linear retries).
+- [x] Apply the status transition to the ticket row (new `linear_state` text column; also flip `status='closed'` on terminal Linear states).
+- [x] Emit `ticket_events.status_changed`.
+- [x] Add `LINEAR_WEBHOOK_SECRET` to env var docs and `.env.local.example`.
+- [x] Tests: signature pass, signature fail, missing timestamp header, unknown `linear_issue_id`, valid transition, duplicate delivery after successful processing, and retry of failed/incomplete deliveries (idempotency via SHA-256 of raw body plus `webhook_deliveries.processing_status`).
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
 - Webhook endpoint exists, verifies signatures, and updates ticket state.
 - Failed signatures return 401 with a normalized error.
-- Duplicate deliveries are idempotent.
+- Duplicate deliveries are idempotent after successful processing; failed/incomplete deliveries remain retryable.
 - The hook into `notifications` Feature exists as a no-op call (filled in Phase 6).
 
 ---
