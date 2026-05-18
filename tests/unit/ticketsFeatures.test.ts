@@ -554,6 +554,7 @@ describe('tickets feature', () => {
         type: 'bug',
         priority: 'P2',
         linear_issue_id: null,
+        linear_state: null,
       });
       const linked = makeTicketRow({ ...triagedNoLink, linear_issue_id: 'lin-3' });
       getByIdMock.mockResolvedValue(triagedNoLink);
@@ -795,6 +796,7 @@ function makeTicketRow(overrides: Partial<TicketRow> = {}): TicketRow {
     dedup_signature: null,
     duplicate_of: null,
     linear_issue_id: null,
+    linear_state: null,
     description_embedding: null,
     ...overrides,
   };

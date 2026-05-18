@@ -267,6 +267,7 @@ function makeTicketRow(overrides: Partial<TicketRow> = {}): TicketRow {
     dedup_signature: null,
     duplicate_of: null,
     linear_issue_id: null,
+    linear_state: null,
     description_embedding: null,
     ...overrides,
   };

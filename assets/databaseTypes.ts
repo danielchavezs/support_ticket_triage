@@ -172,6 +172,7 @@ export type Database = {
           duplicate_of: string | null
           id: string
           linear_issue_id: string | null
+          linear_state: string | null
           org_id: string
           priority: Database["public"]["Enums"]["ticket_priority"] | null
           severity: Database["public"]["Enums"]["ticket_severity"] | null
@@ -195,6 +196,7 @@ export type Database = {
           duplicate_of?: string | null
           id?: string
           linear_issue_id?: string | null
+          linear_state?: string | null
           org_id: string
           priority?: Database["public"]["Enums"]["ticket_priority"] | null
           severity?: Database["public"]["Enums"]["ticket_severity"] | null
@@ -218,6 +220,7 @@ export type Database = {
           duplicate_of?: string | null
           id?: string
           linear_issue_id?: string | null
+          linear_state?: string | null
           org_id?: string
           priority?: Database["public"]["Enums"]["ticket_priority"] | null
           severity?: Database["public"]["Enums"]["ticket_severity"] | null
@@ -291,6 +294,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      webhook_deliveries: {
+        Row: {
+          delivery_hash: string
+          event_type: string | null
+          id: string
+          last_error: string | null
+          org_id: string | null
+          processed_at: string | null
+          processing_status: string
+          provider: string
+          received_at: string
+          ticket_id: string | null
+        }
+        Insert: {
+          delivery_hash: string
+          event_type?: string | null
+          id?: string
+          last_error?: string | null
+          org_id?: string | null
+          processed_at?: string | null
+          processing_status?: string
+          provider: string
+          received_at?: string
+          ticket_id?: string | null
+        }
+        Update: {
+          delivery_hash?: string
+          event_type?: string | null
+          id?: string
+          last_error?: string | null
+          org_id?: string | null
+          processed_at?: string | null
+          processing_status?: string
+          provider?: string
+          received_at?: string
+          ticket_id?: string | null
+        }
+        Relationships: []
       }
     }
     Views: {

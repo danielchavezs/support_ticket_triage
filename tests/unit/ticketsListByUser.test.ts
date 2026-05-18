@@ -92,6 +92,7 @@ const baseTicketRow: TicketRow = {
   dedup_signature: null,
   duplicate_of: null,
   linear_issue_id: null,
+  linear_state: null,
   description_embedding: null,
   created_at: new Date(0).toISOString(),
   updated_at: new Date(0).toISOString(),

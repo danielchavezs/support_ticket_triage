@@ -101,6 +101,7 @@ const ticketRow = (
     dedup_signature: null,
     duplicate_of: null,
     linear_issue_id: null,
+    linear_state: null,
     description_embedding: null,
     created_at: '2026-05-15T10:00:00.000Z',
     updated_at: '2026-05-15T10:00:00.000Z',

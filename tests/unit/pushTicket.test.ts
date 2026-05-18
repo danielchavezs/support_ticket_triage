@@ -81,6 +81,7 @@ function makeTicket(overrides: Partial<TicketRow> = {}): TicketRow {
     dedup_signature: 'abc1234567890',
     duplicate_of: null,
     linear_issue_id: null,
+    linear_state: null,
     description_embedding: null,
     ...overrides,
   };
