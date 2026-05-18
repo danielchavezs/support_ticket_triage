@@ -25,10 +25,11 @@ If this roadmap conflicts with `docs/DC/airiam-ticket-triage-architecture.md`, t
 
 - [x] **Phase 0** — Foundation Hygiene
 - [x] **Phase 1** — Org/User Schema, Enums, RLS
-- [ ] **Phase 2** — Triage Pipeline Refactor
-- [ ] **Phase 3** — Deduplication (deterministic + vector)
-- [ ] **Phase 4** — Linear Outbound (push)
-- [ ] **Phase 5** — Linear Inbound Webhook
+- [x] **Phase 2** — Triage Pipeline Refactor
+- [x] **Phase 3** — Deduplication (deterministic + vector)
+- [x] **Phase 3.5** — Tool-Augmented Classification
+- [x] **Phase 4** — Linear Outbound (push)
+- [x] **Phase 5** — Linear Inbound Webhook
 - [ ] **Phase 6** — Email Notifications
 - [ ] **Phase 7** — Caller Authentication Hardening
 - [ ] **Phase 8** — CI/CD and Pre-Deploy Gates
@@ -49,11 +50,11 @@ Agents must not implement past a blocker. If a phase looks blocked, stop, surfac
 | `BL-001` | Priority matrix validated against ATD triage practice (or replaced) | Phase 1, Phase 2 | **Resolved 2026-05-13** | Daniel | Draft matrix approved as-is. Lands as `services/features/triage/priorityMatrix.ts` in Phase 2. |
 | `BL-002` | `type` + `severity` enum values validated against ATD labelling practice | Phase 1, Phase 2 | **Resolved 2026-05-13** | Daniel | Both enums approved as-drafted. `type`: `bug \| feature \| improvement \| question \| incident`. `severity`: `blocker \| major \| minor \| trivial`. |
 | `BL-003` | Role model on `users` table (admin / submitter / read-only / etc., or none for v1) | Phase 1 | **Resolved 2026-05-13** | Daniel | **No role column in v1.** Additive path preserved — adding a role column or `roles` table later is a future migration, documented in the architecture's Roadmap and Modularity Seams table. |
-| `BL-004` | Dedup action on hit (reject, link, merge, soft-flag only) | Phase 3 | Open | Daniel | — |
-| `BL-005` | Dedup time window (forever, 30d, 90d, per-org configurable) | Phase 3 | Open | Daniel | — |
-| `BL-006` | Vector dedup default state (on, off, behind feature flag) | Phase 3 | Open | Daniel | — |
-| `BL-007` | Embedding model for `pgvector` dedup (Gemini, Vertex AI, OpenAI, etc.) | Phase 3 | Open | Daniel | — |
-| `BL-008` | Linear API key + team ID provisioned for `dev` and `prod` environments | Phase 4 | Open | Daniel | — |
+| `BL-004` | Dedup action on hit (reject, link, merge, soft-flag only) | Phase 3 | **Resolved 2026-05-14** | Daniel | Hybrid action. Deterministic hash hit = hard link (`duplicate_of` set, `status='duplicate'`, skip triage). Vector hit = soft flag (emit `ticket_events.deduplicated` only; row unchanged). |
+| `BL-005` | Dedup time window (forever, 30d, 90d, per-org configurable) | Phase 3 | **Resolved 2026-05-14** | Daniel | Per-org configurable, default 90 days. New `org_settings.dedup_window_days` column (NULL = system default 90). |
+| `BL-006` | Vector dedup default state (on, off, behind feature flag) | Phase 3 | **Resolved 2026-05-14** | Daniel | Per-org configurable, default off. New `org_settings.vector_dedup_enabled` boolean column. Dev seed enables it for the ATD-internal org. |
+| `BL-007` | Embedding model for `pgvector` dedup (Gemini, Vertex AI, OpenAI, etc.) | Phase 3 | **Resolved 2026-05-14** | Daniel | OpenAI `text-embedding-3-large` truncated to 1536 dims via the `dimensions` API parameter (Matryoshka). Fits standard pgvector HNSW index ceiling; reversible to `halfvec(3072)` if recall demands. |
+| `BL-008` | Linear API key + team ID provisioned for `dev` and `prod` environments | Phase 4 | **Resolved 2026-05-16** | Daniel | Team ID locked in `AGENTS.md` §8 (`AIR`, `c66f57f7-2728-4ea5-86e0-dc6f7907a869`). API key provisioned per environment and supplied via the `LINEAR_API_KEY` env var (see `.env.local.example`). |
 | `BL-009` | Email provider (Resend, Postmark, ACS, SendGrid, etc.) | Phase 6 | Open | Daniel | — |
 | `BL-010` | Email sending domain + DNS records (SPF, DKIM, DMARC) | Phase 6 | Open | Daniel | — |
 | `BL-011` | Customer-relevant Linear status-transition subset (which transitions trigger an email) | Phase 6 | Open | Daniel + ATD leads | — |
@@ -147,15 +148,15 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Execution checklist:**
 
-- [ ] Create `services/features/triage/` with: `index.ts` (entry point), `triageTicket.ts` (orchestrator), `priorityMatrix.ts` (table lookup), `schemas.ts` (Zod output schema), `confidence.ts` (threshold logic).
-- [ ] Move triage orchestration out of `services/features/tickets/ticketsFeatures.ts` into the new `triage` Feature. `tickets` Feature retains persistence; `triage` returns a classified result.
-- [ ] Replace the legacy `priority` + `category` LLM output schema with the new `{ type, severity, customer_facing_summary, suggested_reply, confidence }` schema. Validate with Zod.
-- [ ] Implement `priorityMatrix[severity][type]` lookup as a pure function. No fallthrough; matrix is total.
-- [ ] Implement confidence-threshold flagging: below-threshold results return a `needs_human_triage: true` indicator on the ticket.
-- [ ] Emit `ticket_events.triaged` on success and `ticket_events.failed` on LLM error.
-- [ ] Generalize the existing `retryTicketTriage` endpoint so it can resume from any failed step (not just LLM).
-- [ ] Tests: LLM happy path, schema validation rejection, retry path, below-confidence flagging, matrix lookup completeness.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Create `services/features/triage/` with: `index.ts` (entry point), `triageTicket.ts` (orchestrator), `priorityMatrix.ts` (table lookup), `schemas.ts` (Zod output schema), `confidence.ts` (threshold logic).
+- [x] Move triage orchestration out of `services/features/tickets/ticketsFeatures.ts` into the new `triage` Feature. `tickets` Feature retains persistence; `triage` returns a classified result.
+- [x] Replace the legacy `priority` + `category` LLM output schema with the new `{ type, severity, customer_facing_summary, suggested_reply, confidence }` schema. Validate with Zod.
+- [x] Implement `priorityMatrix[severity][type]` lookup as a pure function. No fallthrough; matrix is total.
+- [x] Implement confidence-threshold flagging: below-threshold results return a `needs_human_triage: true` indicator on the ticket. *(Derived in API DTO as `needsHumanTriage` from `confidence < 0.70`; threshold lives in `services/features/triage/confidence.ts`.)*
+- [x] Emit `ticket_events.triaged` on success and `ticket_events.failed` on LLM error.
+- [x] Generalize the existing `retryTicketTriage` endpoint so it can resume from any failed step (not just LLM). *(State-aware dispatcher: re-runs triage when `type IS NULL` or `status='failed'`; idempotent no-op when already triaged. Future phases extend the dispatch table.)*
+- [x] Tests: LLM happy path, schema validation rejection, retry path, below-confidence flagging, matrix lookup completeness.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
@@ -173,25 +174,25 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Prerequisites:**
 
-- [ ] Phase 2 complete.
-- [ ] `BL-004` (dedup action on hit) resolved.
-- [ ] `BL-005` (dedup window) resolved.
-- [ ] `BL-006` (vector default state) resolved.
-- [ ] `BL-007` (embedding model) resolved.
+- [x] Phase 2 complete.
+- [x] `BL-004` (dedup action on hit) resolved.
+- [x] `BL-005` (dedup window) resolved.
+- [x] `BL-006` (vector default state) resolved.
+- [x] `BL-007` (embedding model) resolved.
 
 **Execution checklist:**
 
-- [ ] Create `services/features/dedup/` with `DedupStrategy.ts` interface, `deterministicHash.ts`, `vectorSimilarity.ts`, `dedupTicket.ts` orchestrator.
-- [ ] Implement subject+description normalization (lowercase, trim, collapse whitespace, strip punctuation).
-- [ ] Implement deterministic hash insert+lookup against `dedup_signatures`, scoped to `org_id`.
-- [ ] Add embedding generation Provider call (model per `BL-007`) and persist `description_embedding` on insert.
-- [ ] Implement cosine-similarity query scoped to `org_id` with configurable threshold.
-- [ ] Apply the `BL-004` action on hit (link only / merge / reject — implementation depends on resolution).
-- [ ] Apply the `BL-005` dedup window in the lookup query.
-- [ ] Honor the `BL-006` vector default state (env-toggled or hardcoded).
-- [ ] Emit `ticket_events.deduplicated` on hit.
-- [ ] Tests: deterministic-hash exact and near-miss, vector-similarity true positive and threshold-edge negative, cross-org isolation, window boundary.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Create `services/features/dedup/` with `DedupStrategy.ts` interface, `deterministicHash.ts`, `vectorSimilarity.ts`, `dedupTicket.ts` orchestrator.
+- [x] Implement subject+description normalization (lowercase, trim, collapse whitespace, strip punctuation).
+- [x] Implement deterministic hash insert+lookup against `dedup_signatures`, scoped to `org_id`.
+- [x] Add embedding generation Provider call (model per `BL-007`) and persist `description_embedding` on insert.
+- [x] Implement cosine-similarity query scoped to `org_id` with configurable threshold.
+- [x] Apply the `BL-004` action on hit (link only / merge / reject — implementation depends on resolution).
+- [x] Apply the `BL-005` dedup window in the lookup query.
+- [x] Honor the `BL-006` vector default state (env-toggled or hardcoded).
+- [x] Emit `ticket_events.deduplicated` on hit.
+- [x] Tests: deterministic-hash exact and near-miss, vector-similarity true positive and threshold-edge negative, cross-org isolation, window boundary.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
@@ -201,26 +202,76 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 ---
 
+### Phase 3.5 — Tool-Augmented Classification
+
+**Goal:** upgrade the triage classifier to Gemini 3 Flash and convert the single-shot `generateObject` call into a **bounded** tool-loop. The classifier gains two read-only tools (similar-ticket lookup, recent-user-ticket lookup) to ground its judgment in local context, but everything else (dedup, priority matrix, persistence, retry, event taxonomy) stays strictly deterministic. Slotted after Phase 3 / before Phase 4 so the agent tool surface is stable when Linear-side tools join in Phase 4.
+
+**Prerequisites:**
+
+- [x] Phase 2 complete.
+- [x] Phase 3 complete (vector similarity infra is reused by the `findSimilarTicketsForContext` tool).
+- No new decision blockers.
+
+**Execution checklist:**
+
+- [x] Bump `DEFAULT_MODEL_ID` in `services/providers/ai/client.ts` from `gemini-2.5-flash-lite` to `gemini-3-flash-preview`. Update `.env.local.example` comment. Verify the identifier against `@ai-sdk/google` 3.0.21; `AI_MODEL` env override absorbs any vendor-side identifier drift.
+- [x] Add `classifyTicketWithTools<T>` to `services/providers/ai/index.ts`. Uses `generateText` with `tools` + `output: Output.object({ schema })` + `stopWhen: stepCountIs(maxSteps)`. Returns `{ result: T; steps: StepResult[] }`. Provider remains schema-agnostic (no imports from `services/features/`). Existing `classifyTicket<T>` (single-shot) is retained as the fallback path.
+- [x] Add `listByUser({ orgId, userId, limit })` to `services/providers/supabase/domains/tickets.ts`. Org + user predicates, soft-delete filter, ordered `created_at DESC`. Provider-domain test for the predicates.
+- [x] Create `services/features/triage/tools.ts` exporting `buildTriageTools(ctx)` where `ctx = { orgId, userId, subject, description }`. Tools:
+  - `findSimilarTicketsForContext({ limit?: number = 5 })` — memoizes one embedding via `ai.generateEmbedding`, calls `sources.dedupSignatures.findSimilarTickets`, hydrates each hit via `sources.tickets.getById`, returns top-K with `{ ticketId, similarity, type, severity, status, subjectPreview }`.
+  - `getRecentUserTickets({ limit?: number = 5 })` — calls `sources.tickets.listByUser`, returns recent rows with the same preview shape (minus `similarity`, plus `createdAt`).
+  - Tool `inputSchema` does **not** include `orgId` / `userId`; both are bound from the context closure so the agent cannot cross orgs.
+- [x] Create `services/features/triage/config.ts` exporting `MAX_TOOL_ROUNDS = 4`, `TOOL_LOOP_DEADLINE_MS = 15000`, and `CONTEXT_SIMILARITY_THRESHOLD = 0.7`.
+- [x] Rewire `services/features/triage/triageTicket.ts`:
+  - Build tools with the ticket's `org_id`, `user_id`, `subject`, `description`.
+  - First attempt: `ai.classifyTicketWithTools(...)` runs with `TOOL_LOOP_DEADLINE_MS` enforced via SDK timeout / abort signal.
+  - On success: defense-in-depth Zod re-parse, persist via existing `tickets.updateTriage`, emit `triaged` event with `payload.tool_calls = summarizeSteps(result.steps)` where each entry is `{ name, input, durationMs, ok }` (outputs are not stored).
+  - On timeout or hard error: invoke existing `ai.classifyTicket(...)` (no tools). On success: persist + emit `triaged` with `payload.tool_calls = []` and `payload.fallback = 'single_shot'`. On second failure: existing `persistFailure(...)` path.
+- [x] Tests:
+  - New `tests/unit/triageTools.test.ts` — tool wrappers inject context, ignore agent-passed org/user, memoize the embedding within a single `buildTriageTools` invocation.
+  - New `tests/unit/ticketsListByUser.test.ts` (or extend `orgsUsersDomains.test.ts`) — Provider-domain test for the org + user predicates and soft-delete filter.
+  - Extend `tests/unit/aiProvider.test.ts` — covers `classifyTicketWithTools` forwarding `tools`, `stopWhen`, `output` and returning `{ result, steps }`.
+  - Extend `tests/unit/triageTicket.test.ts` — zero-tool happy path, tool-use happy path with `tool_calls` in event payload, tool-loop timeout → single-shot fallback runs with `payload.fallback === 'single_shot'`, tool-loop + fallback both fail → existing failure-state path.
+- [x] Update `docs/DC/airiam-ticket-triage-architecture.md`: Pipeline step 3 rewritten for the bounded tool-loop with single-shot fallback. Add a "Triage Tool Surface" subsection covering the two tools, guardrails, audit shape, and the "no write tools" invariant.
+- [x] Update this roadmap: check the Phase 3.5 box in the Master Progress Checklist in the same PR that lands the wiring.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass; coverage stays at or above 80% on every metric.
+
+**Deferred (post-MVP or folded into later phases):**
+
+- `lookupTicketByExactSubject` tool — currently subsumed by `findSimilarTicketsForContext` at v1 corpus size; revisit post-MVP if exact-match precision becomes load-bearing.
+- `getActiveLinearIssues` tool — folded into Phase 4 (Linear Outbound). When the Linear Provider lands, add the tool factory alongside.
+- Tool-output recording in audit log — Phase 3.5 stores tool **inputs** only (`{ name, input, durationMs, ok }`). A bounded `outputPreview` field can be added later if operators need it.
+
+**Exit criteria:**
+
+- Both `classifyTicket` and `classifyTicketWithTools` exist; the Provider has no imports from `services/features/`.
+- `triageTicketFeature` runs the tool-loop first and falls back to single-shot on timeout / hard error; persisted ticket shape and `ticket_events` taxonomy are unchanged.
+- `ticket_events.triaged.payload.tool_calls` is populated on the tool-loop path; `payload.fallback = 'single_shot'` on the fallback path.
+- Tool wrappers bind `orgId`/`userId` from context; tool input schemas do not accept those identifiers.
+- Priority matrix is unchanged and still deterministic post-classification.
+
+---
+
 ### Phase 4 — Linear Outbound (push)
 
 **Goal:** push every triaged ticket as a new issue into the ATD Linear team's Triage queue, persisting the resulting Linear issue ID on the ticket row.
 
 **Prerequisites:**
 
-- [ ] Phase 2 complete.
-- [ ] `BL-008` (Linear API key + team ID provisioned) resolved.
+- [x] Phase 2 complete.
+- [x] `BL-008` (Linear API key + team ID provisioned) resolved.
 
 **Execution checklist:**
 
-- [ ] Add `@linear/sdk` to dependencies.
-- [ ] Create `services/providers/linear/` with `client.ts` (SDK wrapper) and `LinearProvider.ts` (Protocol-style interface).
-- [ ] Implement `createIssue`, `updateIssue`, `getIssue`, and `verifyWebhookSignature` helper methods on the Provider (verify helper used by Phase 5).
-- [ ] Create `services/features/linear-sync/` with `pushTicket.ts` and field-mapping logic per the architecture doc's mapping table.
-- [ ] Wire `pushTicket` into the triage pipeline as step 6 (inline, after persist).
-- [ ] Persist `linear_issue_id` on the ticket row; emit `ticket_events.pushed_to_linear`.
-- [ ] Add transient-failure retry semantics (don't fail the whole submission if Linear is briefly unavailable; flag the ticket for retry).
-- [ ] Tests: success, transient failure with retry, hard failure with manual-retry path, field-mapping correctness.
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Add `@linear/sdk` to dependencies.
+- [x] Create `services/providers/linear/` with `client.ts` (SDK wrapper) and `index.ts` (LinearProvider interface).
+- [x] Implement `createIssue`, `getIssue`, and `verifyWebhookSignature` helper methods on the Provider (verify helper used by Phase 5). *(updateIssue deferred to Phase 5 — webhook handler is the only updater in v1.)*
+- [x] Create `services/features/linear-sync/` with `pushTicket.ts` and field-mapping logic per the architecture doc's mapping table.
+- [x] Wire `pushTicket` into the triage pipeline as step 6 (inline, after persist).
+- [x] Persist `linear_issue_id` on the ticket row; emit `ticket_events.pushed_to_linear`.
+- [x] Add transient-failure retry semantics (don't fail the whole submission if Linear is briefly unavailable; flag the ticket for retry via the existing retry dispatcher branch `status='triaged' && linear_issue_id IS NULL`).
+- [x] Tests: success, transient failure with retry, hard failure with manual-retry path, field-mapping correctness.
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
@@ -236,25 +287,25 @@ The checklists below are at task granularity, not stage-and-commit granularity. 
 
 **Prerequisites:**
 
-- [ ] Phase 4 complete.
+- [x] Phase 4 complete.
 
 **Execution checklist:**
 
-- [ ] Create `app/api/linear/webhook/route.ts`. Capture raw body and signature headers; pass through to the Feature.
-- [ ] Create `services/features/linear-sync/handleWebhook.ts`.
-- [ ] Feature calls `LinearProvider.verifyWebhookSignature` before mutating state. On failure, return a `FeatureError` mapped to HTTP 401.
-- [ ] Lookup the ticket by `linear_issue_id`. If not found, log structured warning and return 200 (don't 404 — Linear retries).
-- [ ] Apply the status transition to the ticket row.
-- [ ] Emit `ticket_events.status_changed`.
-- [ ] Add `LINEAR_WEBHOOK_SECRET` to env var docs and `.env.local.example`.
-- [ ] Tests: signature pass, signature fail, unknown `linear_issue_id`, valid transition, duplicate delivery (idempotency on Linear's delivery-id header).
-- [ ] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
+- [x] Create `app/api/linear/webhook/route.ts`. Capture raw body and signature headers; pass through to the Feature.
+- [x] Create `services/features/linear-sync/handleWebhook.ts`.
+- [x] Feature calls `LinearProvider.verifyWebhookSignature` (via `parseWebhookPayload`) before mutating state. On failure, return a `FeatureError` mapped to HTTP 401.
+- [x] Lookup the ticket by `linear_issue_id`. If not found, log structured warning and return 200 (don't 404 — Linear retries).
+- [x] Apply the status transition to the ticket row (new `linear_state` text column; also flip `status='closed'` on terminal Linear states).
+- [x] Emit `ticket_events.status_changed`.
+- [x] Add `LINEAR_WEBHOOK_SECRET` to env var docs and `.env.local.example`.
+- [x] Tests: signature pass, signature fail, missing timestamp header, unknown `linear_issue_id`, valid transition, duplicate delivery after successful processing, and retry of failed/incomplete deliveries (idempotency via SHA-256 of raw body plus `webhook_deliveries.processing_status`).
+- [x] Verify `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all pass.
 
 **Exit criteria:**
 
 - Webhook endpoint exists, verifies signatures, and updates ticket state.
 - Failed signatures return 401 with a normalized error.
-- Duplicate deliveries are idempotent.
+- Duplicate deliveries are idempotent after successful processing; failed/incomplete deliveries remain retryable.
 - The hook into `notifications` Feature exists as a no-op call (filled in Phase 6).
 
 ---

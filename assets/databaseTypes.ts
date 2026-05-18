@@ -53,6 +53,44 @@ export type Database = {
           },
         ]
       }
+      org_settings: {
+        Row: {
+          created_at: string
+          dedup_window_days: number | null
+          deleted_at: string | null
+          id: string
+          org_id: string
+          updated_at: string
+          vector_dedup_enabled: boolean
+        }
+        Insert: {
+          created_at?: string
+          dedup_window_days?: number | null
+          deleted_at?: string | null
+          id?: string
+          org_id: string
+          updated_at?: string
+          vector_dedup_enabled?: boolean
+        }
+        Update: {
+          created_at?: string
+          dedup_window_days?: number | null
+          deleted_at?: string | null
+          id?: string
+          org_id?: string
+          updated_at?: string
+          vector_dedup_enabled?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "org_settings_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: true
+            referencedRelation: "orgs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       orgs: {
         Row: {
           created_at: string
@@ -134,6 +172,7 @@ export type Database = {
           duplicate_of: string | null
           id: string
           linear_issue_id: string | null
+          linear_state: string | null
           org_id: string
           priority: Database["public"]["Enums"]["ticket_priority"] | null
           severity: Database["public"]["Enums"]["ticket_severity"] | null
@@ -157,6 +196,7 @@ export type Database = {
           duplicate_of?: string | null
           id?: string
           linear_issue_id?: string | null
+          linear_state?: string | null
           org_id: string
           priority?: Database["public"]["Enums"]["ticket_priority"] | null
           severity?: Database["public"]["Enums"]["ticket_severity"] | null
@@ -180,6 +220,7 @@ export type Database = {
           duplicate_of?: string | null
           id?: string
           linear_issue_id?: string | null
+          linear_state?: string | null
           org_id?: string
           priority?: Database["public"]["Enums"]["ticket_priority"] | null
           severity?: Database["public"]["Enums"]["ticket_severity"] | null
@@ -254,12 +295,63 @@ export type Database = {
           },
         ]
       }
+      webhook_deliveries: {
+        Row: {
+          delivery_hash: string
+          event_type: string | null
+          id: string
+          last_error: string | null
+          org_id: string | null
+          processed_at: string | null
+          processing_status: string
+          provider: string
+          received_at: string
+          ticket_id: string | null
+        }
+        Insert: {
+          delivery_hash: string
+          event_type?: string | null
+          id?: string
+          last_error?: string | null
+          org_id?: string | null
+          processed_at?: string | null
+          processing_status?: string
+          provider: string
+          received_at?: string
+          ticket_id?: string | null
+        }
+        Update: {
+          delivery_hash?: string
+          event_type?: string | null
+          id?: string
+          last_error?: string | null
+          org_id?: string | null
+          processed_at?: string | null
+          processing_status?: string
+          provider?: string
+          received_at?: string
+          ticket_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      find_similar_tickets: {
+        Args: {
+          p_limit: number
+          p_org_id: string
+          p_query_embedding: string
+          p_similarity_threshold: number
+          p_window_days: number
+        }
+        Returns: {
+          similarity: number
+          ticket_id: string
+        }[]
+      }
     }
     Enums: {
       ticket_event_type:

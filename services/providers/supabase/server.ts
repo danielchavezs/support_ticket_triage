@@ -15,12 +15,27 @@ import { makeTickets, type TicketsSource } from '@/services/providers/supabase/d
 import { makeOrgs, type OrgsSource } from '@/services/providers/supabase/domains/orgs';
 import { makeUsers, type UsersSource } from '@/services/providers/supabase/domains/users';
 import { makeTicketEvents, type TicketEventsSource } from '@/services/providers/supabase/domains/ticketEvents';
+import {
+  makeOrgSettings,
+  type OrgSettingsSource,
+} from '@/services/providers/supabase/domains/orgSettings';
+import {
+  makeDedupSignatures,
+  type DedupSignaturesSource,
+} from '@/services/providers/supabase/domains/dedupSignatures';
+import {
+  makeWebhookDeliveries,
+  type WebhookDeliveriesSource,
+} from '@/services/providers/supabase/domains/webhookDeliveries';
 
 export type ServerSources = {
   tickets: TicketsSource;
   orgs: OrgsSource;
   users: UsersSource;
   ticketEvents: TicketEventsSource;
+  orgSettings: OrgSettingsSource;
+  dedupSignatures: DedupSignaturesSource;
+  webhookDeliveries: WebhookDeliveriesSource;
 };
 
 export function wireServer(): ServerSources {
@@ -30,6 +45,9 @@ export function wireServer(): ServerSources {
     orgs: makeOrgs(getClient),
     users: makeUsers(getClient),
     ticketEvents: makeTicketEvents(getClient),
+    orgSettings: makeOrgSettings(getClient),
+    dedupSignatures: makeDedupSignatures(getClient),
+    webhookDeliveries: makeWebhookDeliveries(getClient),
   };
 }
 

@@ -151,7 +151,7 @@ Authoritative schema lives in `migrations/`. v1 starter tables:
 | `ticket_events` | Append-only event log per ticket, carrying `org_id` for simple RLS and event-list queries. Lightweight audit trail. v1 captures: `received`, `triaged`, `deduplicated`, `pushed_to_linear`, `status_changed`, `email_sent`, `failed`. |
 | `dedup_signatures` | Deterministic-hash index for dedup. One row per `(org_id, normalized_signature)` with a reference back to the canonical ticket. |
 
-Embeddings for vector dedup live as a `pgvector` column on `tickets` (`description_embedding`), populated by a Feature, queried by the dedup Feature. Phase 1 creates this as an unconstrained `vector`; Phase 3 locks dimension-specific indexing after the embedding model decision resolves.
+Embeddings for vector dedup live as a `pgvector` column on `tickets` (`description_embedding`), populated by a Feature, queried by the dedup Feature. Phase 1 created this as an unconstrained `vector`; **Phase 3 locked the column to `vector(1536)` with an HNSW index (`vector_cosine_ops`)** after `BL-007` resolved to OpenAI `text-embedding-3-large` truncated to 1536 dimensions via the `dimensions` API parameter (Matryoshka representation). The fallback to `halfvec(3072)` + HNSW remains a single-ALTER away if recall demands the full vector. Phase 3 also added an `org_settings` table (1:1 with `orgs`) holding `dedup_window_days` and `vector_dedup_enabled` for per-org policy.
 
 ### RLS posture in v1
 
@@ -197,8 +197,8 @@ Every incoming submission, regardless of source, is normalized into a single int
 ### Steps
 
 1. **Receive and persist.** Insert the raw submission into `tickets` with `status = 'received'`. Emit `ticket.received` event.
-2. **Dedup check.** Compute the deterministic signature; query `dedup_signatures` for the calling `org_id`. If hit: mark as `duplicate_of`, set status accordingly. Action on hit (reject, link, merge) is **deferred**.
-3. **LLM classification.** Call the LLM Provider to produce `{ type, severity, customer_facing_summary, suggested_reply, confidence }`. Validated with Zod.
+2. **Dedup check.** Compute the deterministic signature; query `dedup_signatures` for the calling `org_id` within the org's configured dedup window. Deterministic hash hit: hard-link the ticket (`duplicate_of`, `status='duplicate'`) and skip triage. Vector-only hit: emit a `deduplicated` event as a soft flag and continue triage.
+3. **LLM classification.** Run a **bounded tool-loop** via the LLM Provider. The model (Gemini 3 Flash from Phase 3.5 onward) may call read-only context tools (see *Triage Tool Surface* below) within a strict round / wall-clock budget, then produces `{ type, severity, customer_facing_summary, suggested_reply, confidence }` validated with Zod. If the loop times out or hard-errors before producing structured output, the Provider falls back once to the single-shot `generateObject` path. The agent has no write tools — persistence, dedup, priority, Linear push, and email all run as deterministic code after this step.
 4. **Deterministic priority.** Compute `priority = priorityMatrix[severity][type]`.
 5. **Persist triage result.** Update the ticket row, emit `ticket.triaged`.
 6. **Push to Linear.** Create a Linear issue via the Linear Provider. Store `linear_issue_id` on the ticket. Emit `ticket.pushed_to_linear`.
@@ -234,7 +234,21 @@ Both are encoded as Postgres `CREATE TYPE` enums in Phase 1. Adding a value late
 
 ### LLM provider in v1
 
-Stays on Google Gemini via the Vercel AI SDK, matching the current code. Vertex AI / Azure OpenAI swaps are a Provider-level change, not architectural. Two-stage classification (Gemini Flash filter + GPT-4o triage) from the legacy design is **not in v1**; one Provider call, revisited only if accuracy on a future eval set is insufficient.
+Stays on Google Gemini via the Vercel AI SDK, matching the current code. **Phase 3.5 upgrades the default to Gemini 3 Flash** (`gemini-3-flash-preview`, replacing `gemini-2.5-flash-lite`) for stronger tool-use and grounding; the `AI_MODEL` env var continues to override the default. Vertex AI / Azure OpenAI swaps are a Provider-level change, not architectural. Two-stage classification (Gemini Flash filter + GPT-4o triage) from the legacy design is **not in v1**; one Provider call (now optionally tool-augmented), revisited only if accuracy on a future eval set is insufficient.
+
+### Triage Tool Surface (Phase 3.5)
+
+The classification step is bounded-agentic, not free-roaming. Strict invariants:
+
+- **No write tools.** Persistence, dedup hard-link, priority assignment, Linear push, email, and event emission all run as deterministic code outside the model loop. The model only classifies.
+- **Read-only context tools.** The model has access to:
+  - `findSimilarTicketsForContext({ limit? })` — top-K nearest tickets by cosine similarity over `description_embedding`, scoped to the calling org. Reuses Phase 3's `find_similar_tickets` Postgres function with its own threshold; does not commit any dedup linkage. The current ticket is filtered out of the result so the model never sees itself as a similar match (dedup persists the current ticket's embedding before triage runs, so the RPC otherwise returns it as the top hit).
+  - `getRecentUserTickets({ limit? })` — the submitting user's recent tickets in the same org, newest first. The current ticket is filtered out so the tool returns prior history, not the in-flight submission.
+  - *(Deferred to Phase 4)* `getActiveLinearIssues({ ... })` — added alongside the Linear Provider.
+- **Org/user scoping is non-negotiable.** Tool input schemas do not accept `orgId` or `userId`. Both are bound from the request-context closure when the tool is constructed, so the agent has no way to query a different org or user.
+- **Bounded loop.** Maximum 4 tool-call rounds (`stopWhen: stepCountIs(4)`); maximum 15s wall clock via SDK timeout / abort signal. On budget exceed or hard error, the Provider falls back once to the single-shot `generateObject` path. The ticket always lands either `triaged` or `failed` — fallback never blocks the pipeline.
+- **Auditable.** Every tool call lands in `ticket_events.triaged.payload.tool_calls` as `{ name, input, durationMs, ok }`. Outputs are not stored (payload bloat); `payload.fallback = 'single_shot'` marks tickets that took the fallback path.
+- **Deterministic post-step unchanged.** Whatever the agent returns, `priority` is still computed by `priorityMatrix[severity][type]` and the existing `tickets.updateTriage` persists the row. The matrix and the schema are unbypassable.
 
 ### Confidence handling
 
@@ -247,9 +261,9 @@ Two strategies, both implemented behind a `DedupStrategy` interface in `services
 1. **Deterministic hash.** Normalize subject + description (lowercase, trim, collapse whitespace, strip punctuation), hash, scoped to `org_id`. Insert into `dedup_signatures` on every new ticket. Lookup on the next submission.
 2. **Vector similarity (pgvector).** On insert, write `description_embedding` to the row. On query, perform a cosine-similarity search scoped to `org_id`. Configurable similarity threshold.
 
-Both strategies are in v1 scope. The deterministic strategy gates first; the vector strategy is a soft flag that surfaces likely-near-duplicates on the resulting ticket for the assignee to merge in Linear.
+Both strategies are in v1 scope. The deterministic strategy gates first; the vector strategy is a soft flag that surfaces likely-near-duplicates for downstream handling without committing a row-level duplicate link.
 
-**Open:** action on hit (reject, link, merge), dedup window (forever, 30 days, 90 days, per-org configurable), and whether the vector check is on by default or behind a feature flag. All deferred.
+Phase 3 resolves the policy knobs as follows: deterministic hits hard-link and skip triage; vector hits emit `ticket_events.deduplicated` only; the dedup window is per-org configurable with a 90-day default; vector dedup is per-org configurable and defaults off.
 
 ## Email and Notification
 
@@ -364,9 +378,9 @@ Items deferred during the scoping pass on 2026-05-12. Each is a small, scoped de
 1. **Service-to-server caller auth mechanism for in-app submissions** (HMAC, OAuth client credentials, signed JWT, etc.).
 2. ~~**Role model on `users`**~~ — **Resolved 2026-05-13:** no role column in v1; additive future migration if/when needed.
 3. **AIP monitoring webhook contract** (payload shape, auth, retry semantics).
-4. **Dedup action on hit** (reject, link, merge).
-5. **Dedup window** (forever, 30d, 90d, per-org configurable).
-6. **Vector dedup default state** (on, off, behind flag).
+4. ~~**Dedup action on hit**~~ — **Resolved 2026-05-14:** hybrid action. Deterministic hash hit = hard link (`duplicate_of` set, `status='duplicate'`, skip triage). Vector hit = soft flag (emit `ticket_events.deduplicated` only; row unchanged). See `docs/DC/P3-deduplication-plan.md` §2.
+5. ~~**Dedup window**~~ — **Resolved 2026-05-14:** per-org configurable, default 90 days. Stored on the new `org_settings.dedup_window_days` column (NULL = system default).
+6. ~~**Vector dedup default state**~~ — **Resolved 2026-05-14:** per-org configurable, default off. Stored on `org_settings.vector_dedup_enabled`. The dev seed enables it for the ATD-internal org so the path runs in local dev.
 7. **Email provider** (Resend, Postmark, Azure Communication Services, SendGrid).
 8. **Email sending domain.**
 9. **Email status-change transition subset** (which Linear states trigger a customer email).

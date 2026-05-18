@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@ai-sdk/google": "3.0.21",
+    "@ai-sdk/openai": "3.0.63",
+    "@linear/sdk": "84.0.0",
     "@supabase/ssr": "0.8.0",
     "@supabase/supabase-js": "2.95.1",
     "ai": "6.0.72",

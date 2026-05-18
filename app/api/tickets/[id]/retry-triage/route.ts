@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { retryTicketTriageFeature } from '@/services/features/tickets';
-import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
+import { toTicketDto } from '@/app/api/tickets/_dto';
 
 export const runtime = 'nodejs';
 
@@ -61,26 +61,4 @@ export async function POST(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function toTicketDto(row: TicketRow) {
-  return {
-    id: row.id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    orgId: row.org_id,
-    userId: row.user_id,
-    sourceKind: row.source_kind,
-    subject: row.subject,
-    description: row.description,
-    type: row.type,
-    severity: row.severity,
-    priority: row.priority,
-    confidence: row.confidence,
-    customerFacingSummary: row.customer_facing_summary,
-    suggestedReply: row.suggested_reply,
-    status: row.status,
-    triageError: row.triage_error,
-    linearIssueId: row.linear_issue_id,
-  };
 }

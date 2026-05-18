@@ -20,7 +20,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Database, Tables, TablesInsert } from '@/assets/databaseTypes';
+import type { Database, Tables, TablesInsert, TablesUpdate } from '@/assets/databaseTypes';
+import { serializeEmbedding } from '@/services/providers/supabase/vectorEncoding';
 
 export type TicketRow = Tables<'tickets'>;
 export type NewTicketRow = TablesInsert<'tickets'>;
@@ -33,6 +34,19 @@ export type TicketSourceKind = Database['public']['Enums']['ticket_source_kind']
 
 export type TicketsSource = ReturnType<typeof makeTickets>;
 
+/**
+ * Partial update for Phase 3 dedup-state fields. Only keys present on the
+ * object are written to the row — missing keys leave the column untouched.
+ * Pass `null` explicitly to clear a column (e.g., clearing a stale
+ * `duplicate_of` link during retry).
+ */
+export type TicketDedupUpdate = {
+  dedupSignature?: string | null;
+  descriptionEmbedding?: number[] | null;
+  duplicateOf?: string | null;
+  status?: TicketStatus;
+};
+
 export type CreateTicketInput = {
   orgId: string;
   userId: string;
@@ -42,9 +56,12 @@ export type CreateTicketInput = {
 };
 
 export type TicketTriageUpdate = {
-  type: TicketType;
-  severity: TicketSeverity;
-  priority: TicketPriority;
+  // On the success path these are non-null; on the failure path they are
+  // cleared to null alongside `status='failed'` and a populated `triageError`.
+  // The DB columns are nullable to support both states.
+  type: TicketType | null;
+  severity: TicketSeverity | null;
+  priority: TicketPriority | null;
   confidence: number | null;
   customerFacingSummary: string | null;
   suggestedReply: string | null;
@@ -86,6 +103,38 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
 
       if (error) throw error;
       return (data ?? null) as TicketRow | null;
+    },
+
+    /**
+     * List non-deleted tickets for a specific user inside an org, newest first.
+     *
+     * Phase 3.5 consumer: the `getRecentUserTickets` triage tool reads the
+     * submitter's recent history to ground the classifier. Both org and user
+     * predicates are mandatory — there is no read-only "recent tickets"
+     * surface for the App layer, and the tool factory binds both ids from
+     * its context closure rather than accepting them from the agent.
+     */
+    async listByUser({
+      orgId,
+      userId,
+      limit,
+    }: {
+      orgId: string;
+      userId: string;
+      limit: number;
+    }): Promise<TicketRow[]> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('*')
+        .eq('org_id', orgId)
+        .eq('user_id', userId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+      return (data ?? []) as TicketRow[];
     },
 
     /**
@@ -138,6 +187,150 @@ export function makeTickets(getSupabaseClient: () => Promise<SupabaseClient<Data
           status: update.status,
           triage_error: update.triageError,
         })
+        .eq('id', ticketId)
+        .eq('org_id', orgId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    /**
+     * Look up a ticket by its Linear issue UUID. Used by the Phase 5 inbound
+     * webhook handler, which has no `orgId` context at lookup time — the
+     * webhook only carries the Linear issue ID. The partial-unique index on
+     * `linear_issue_id` (Phase 1, see migration 05) makes this globally
+     * unique, so there's no ambiguity in the absence of an org predicate.
+     *
+     * Returns null when the issue has no matching ticket (typical when an
+     * issue was created in Linear directly, not pushed by us).
+     */
+    async findByLinearIssueId(linearIssueId: string): Promise<TicketRow | null> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .select('*')
+        .eq('linear_issue_id', linearIssueId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (error) throw error;
+      return (data ?? null) as TicketRow | null;
+    },
+
+    /**
+     * Apply a Linear state transition to a ticket (Phase 5). Always updates
+     * `linear_state` (free-form text); optionally also flips `status` (e.g.,
+     * to `'closed'` when Linear reports a terminal state).
+     */
+    async updateLinearState({
+      orgId,
+      ticketId,
+      linearState,
+      status,
+    }: {
+      orgId: string;
+      ticketId: string;
+      linearState: string;
+      status?: TicketStatus;
+    }): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+      const patch: TablesUpdate<'tickets'> = { linear_state: linearState };
+      if (status !== undefined) {
+        patch.status = status;
+      }
+      const { data, error } = await supabase
+        .from('tickets')
+        .update(patch)
+        .eq('id', ticketId)
+        .eq('org_id', orgId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    /**
+     * Persist the Linear issue ID after a successful outbound push (Phase 4).
+     *
+     * Phase 4 invariants:
+     *   - The partial-unique index on `linear_issue_id` (where not null)
+     *     rejects a second push for the same ticket OR a stale push that
+     *     references an already-claimed Linear issue. The Feature catches
+     *     the unique-violation and treats it as idempotent success.
+     *   - We do NOT change `status` here — the ticket stays `triaged`
+     *     after a successful push. `pushed_to_linear` is an event, not a
+     *     row-state transition; this matches the rest of the v1 status
+     *     vocabulary (received → triaged → ...). Future workflows that
+     *     surface "delivered to Linear" as a UI state can introduce a
+     *     new status value without churning this method.
+     */
+    async updateLinearLink({
+      orgId,
+      ticketId,
+      linearIssueId,
+    }: {
+      orgId: string;
+      ticketId: string;
+      linearIssueId: string;
+    }): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+      const { data, error } = await supabase
+        .from('tickets')
+        .update({ linear_issue_id: linearIssueId })
+        .eq('id', ticketId)
+        .eq('org_id', orgId)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as TicketRow;
+    },
+
+    /**
+     * Apply Phase 3 dedup-state fields to a ticket. Partial: only fields
+     * present on `update` are written. `descriptionEmbedding` is accepted as
+     * a `number[]` and serialized to the pgvector text format inside this
+     * method so callers never deal with the wire format.
+     *
+     * Ordering caveat: dedup state and triage state can both reach the same
+     * row, but never concurrently in the happy path — `createTicketFeature`
+     * runs dedup strictly before triage, and the retry dispatcher serializes
+     * the two paths.
+     */
+    async updateDedupState({
+      orgId,
+      ticketId,
+      update,
+    }: {
+      orgId: string;
+      ticketId: string;
+      update: TicketDedupUpdate;
+    }): Promise<TicketRow> {
+      const supabase = await getSupabaseClient();
+
+      const patch: TablesUpdate<'tickets'> = {};
+      if ('dedupSignature' in update) {
+        patch.dedup_signature = update.dedupSignature ?? null;
+      }
+      if ('descriptionEmbedding' in update) {
+        patch.description_embedding =
+          update.descriptionEmbedding == null
+            ? null
+            : serializeEmbedding(update.descriptionEmbedding);
+      }
+      if ('duplicateOf' in update) {
+        patch.duplicate_of = update.duplicateOf ?? null;
+      }
+      if (update.status !== undefined) {
+        patch.status = update.status;
+      }
+
+      const { data, error } = await supabase
+        .from('tickets')
+        .update(patch)
         .eq('id', ticketId)
         .eq('org_id', orgId)
         .select('*')

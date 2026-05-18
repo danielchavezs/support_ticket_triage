@@ -4,6 +4,7 @@ export default function TicketBadges(props: {
   priority: Ticket['priority'];
   status: Ticket['status'];
   type: Ticket['type'];
+  dedupStatus?: Ticket['dedupStatus'];
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -22,6 +23,11 @@ export default function TicketBadges(props: {
       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass(props.status)}`}>
         {props.status.replace(/_/g, ' ')}
       </span>
+      {props.dedupStatus === 'duplicate' ? (
+        <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs font-medium text-zinc-700">
+          Duplicate
+        </span>
+      ) : null}
     </div>
   );
 }

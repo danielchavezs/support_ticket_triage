@@ -35,12 +35,25 @@ describe('Tickets API Route', () => {
       listMock.mockResolvedValue({ success: true, data: mockTickets } as Awaited<ReturnType<typeof listTicketsFeature>>);
 
       const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
-      const json = (await response.json()) as { tickets: Array<{ subject: string; status: string }> };
+      const json = (await response.json()) as { tickets: Array<{ subject: string; status: string; needsHumanTriage: boolean }> };
 
       expect(response.status).toBe(200);
       expect(listMock).toHaveBeenCalledWith({ orgId: ORG_A });
       expect(json.tickets).toHaveLength(1);
       expect(json.tickets[0].subject).toBe('Test');
+      // confidence is null → needsHumanTriage true (low-confidence by default)
+      expect(json.tickets[0].needsHumanTriage).toBe(true);
+    });
+
+    it('flags needsHumanTriage=false when confidence is at or above the threshold', async () => {
+      const mockTickets: TicketRow[] = [makeTicketRow({ id: '1', confidence: 0.9, status: 'triaged' })];
+      listMock.mockResolvedValue({ success: true, data: mockTickets } as Awaited<ReturnType<typeof listTicketsFeature>>);
+
+      const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
+      const json = (await response.json()) as { tickets: Array<{ needsHumanTriage: boolean; confidence: number }> };
+
+      expect(json.tickets[0].needsHumanTriage).toBe(false);
+      expect(json.tickets[0].confidence).toBe(0.9);
     });
 
     it('returns 400 when orgId is missing from the query string', async () => {
@@ -69,6 +82,46 @@ describe('Tickets API Route', () => {
       const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
       expect(response.status).toBe(500);
     });
+
+    it('surfaces dedupStatus=duplicate + duplicateOf for a confirmed duplicate row', async () => {
+      const canonicalId = '00000000-0000-0000-0000-0000000000c2';
+      const mockTickets: TicketRow[] = [
+        makeTicketRow({
+          id: 'aaa',
+          status: 'duplicate',
+          duplicate_of: canonicalId,
+          dedup_signature: 'sig-x',
+        }),
+      ];
+      listMock.mockResolvedValue({
+        success: true,
+        data: mockTickets,
+      } as Awaited<ReturnType<typeof listTicketsFeature>>);
+
+      const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
+      const json = (await response.json()) as {
+        tickets: Array<{ dedupStatus: string; duplicateOf: string | null }>;
+      };
+
+      expect(json.tickets[0].dedupStatus).toBe('duplicate');
+      expect(json.tickets[0].duplicateOf).toBe(canonicalId);
+    });
+
+    it('surfaces dedupStatus=unique + duplicateOf=null for a normal row', async () => {
+      const mockTickets: TicketRow[] = [makeTicketRow({ id: 'aaa', status: 'triaged' })];
+      listMock.mockResolvedValue({
+        success: true,
+        data: mockTickets,
+      } as Awaited<ReturnType<typeof listTicketsFeature>>);
+
+      const response = (await GET(makeRequest(`https://example.local/api/tickets?orgId=${ORG_A}`))) as MockResponse;
+      const json = (await response.json()) as {
+        tickets: Array<{ dedupStatus: string; duplicateOf: string | null }>;
+      };
+
+      expect(json.tickets[0].dedupStatus).toBe('unique');
+      expect(json.tickets[0].duplicateOf).toBeNull();
+    });
   });
 
   describe('POST', () => {
@@ -84,16 +137,23 @@ describe('Tickets API Route', () => {
 
       createMock.mockResolvedValue({
         success: true,
-        data: makeTicketRow({ id: '123', subject: validBody.subject, description: validBody.description }),
+        data: makeTicketRow({
+          id: '123',
+          subject: validBody.subject,
+          description: validBody.description,
+          confidence: 0.85,
+          status: 'triaged',
+        }),
       } as Awaited<ReturnType<typeof createTicketFeature>>);
 
       const response = (await POST(mockRequest)) as MockResponse;
-      const json = (await response.json()) as { ticket: { id: string; status: string } };
+      const json = (await response.json()) as { ticket: { id: string; status: string; needsHumanTriage: boolean } };
 
       expect(response.status).toBe(201);
       expect(createMock).toHaveBeenCalledWith(validBody);
       expect(json.ticket.id).toBe('123');
-      expect(json.ticket.status).toBe('received');
+      expect(json.ticket.status).toBe('triaged');
+      expect(json.ticket.needsHumanTriage).toBe(false);
     });
 
     it('returns 400 for invalid JSON', async () => {
@@ -152,6 +212,30 @@ describe('Tickets API Route', () => {
       const response = (await POST(mockRequest)) as MockResponse;
       expect(response.status).toBe(500);
     });
+
+    it('surfaces dedupStatus=duplicate when the Feature returns a duplicate row (deterministic hit)', async () => {
+      const canonicalId = '00000000-0000-0000-0000-0000000000c1';
+      const mockRequest = { json: async () => validBody } as Request;
+      createMock.mockResolvedValue({
+        success: true,
+        data: makeTicketRow({
+          id: '123',
+          status: 'duplicate',
+          duplicate_of: canonicalId,
+          dedup_signature: 'sig-y',
+        }),
+      } as Awaited<ReturnType<typeof createTicketFeature>>);
+
+      const response = (await POST(mockRequest)) as MockResponse;
+      const json = (await response.json()) as {
+        ticket: { dedupStatus: string; duplicateOf: string | null; status: string };
+      };
+
+      expect(response.status).toBe(201);
+      expect(json.ticket.status).toBe('duplicate');
+      expect(json.ticket.dedupStatus).toBe('duplicate');
+      expect(json.ticket.duplicateOf).toBe(canonicalId);
+    });
   });
 });
 
@@ -183,6 +267,7 @@ function makeTicketRow(overrides: Partial<TicketRow> = {}): TicketRow {
     dedup_signature: null,
     duplicate_of: null,
     linear_issue_id: null,
+    linear_state: null,
     description_embedding: null,
     ...overrides,
   };
