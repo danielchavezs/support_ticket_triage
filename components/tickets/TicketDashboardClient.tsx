@@ -44,7 +44,7 @@ export default function TicketDashboardClient() {
 
   const summary = useMemo(() => {
     const total = tickets.length;
-    const failed = tickets.filter((t) => t.triageStatus === 'failed').length;
+    const failed = tickets.filter((t) => t.status === 'failed').length;
     return { total, failed };
   }, [tickets]);
 

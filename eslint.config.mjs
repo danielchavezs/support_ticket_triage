@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Next.js generates typed-route validation files that are not meant to be linted.
     "types/**",
+    // Vitest coverage output is a generated artifact.
+    "coverage/**",
   ]),
 ]);
 

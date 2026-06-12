@@ -1,29 +1,63 @@
-import type { Ticket } from '@/components/tickets/types';
+import type { Ticket, TicketPriority, TicketStatus } from '@/components/tickets/types';
 
-export default function TicketBadges(props: { priority: Ticket['priority']; category: Ticket['category']; triageStatus: Ticket['triageStatus'] }) {
+export default function TicketBadges(props: {
+  priority: Ticket['priority'];
+  status: Ticket['status'];
+  type: Ticket['type'];
+  dedupStatus?: Ticket['dedupStatus'];
+}) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${badge(props.priority)}`}>{props.priority}</span>
-      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">{props.category}</span>
-      {props.triageStatus === 'failed' ? (
-        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
-          Triage failed (fallback)
+      {props.priority ? (
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${priorityClass(props.priority)}`}>
+          {props.priority}
+        </span>
+      ) : (
+        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500">
+          Triage pending
+        </span>
+      )}
+      {props.type ? (
+        <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">{props.type}</span>
+      ) : null}
+      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClass(props.status)}`}>
+        {props.status.replace(/_/g, ' ')}
+      </span>
+      {props.dedupStatus === 'duplicate' ? (
+        <span className="rounded-full bg-zinc-200 px-2 py-0.5 text-xs font-medium text-zinc-700">
+          Duplicate
         </span>
       ) : null}
     </div>
   );
 }
 
-function badge(priority: Ticket['priority']) {
+function priorityClass(priority: TicketPriority) {
   switch (priority) {
-    case 'Critical':
+    case 'P1':
       return 'bg-red-100 text-red-800';
-    case 'High':
+    case 'P2':
       return 'bg-orange-100 text-orange-800';
-    case 'Medium':
+    case 'P3':
       return 'bg-yellow-100 text-yellow-900';
-    case 'Low':
+    case 'P4':
       return 'bg-green-100 text-green-800';
   }
 }
 
+function statusClass(status: TicketStatus) {
+  switch (status) {
+    case 'received':
+      return 'bg-sky-100 text-sky-800';
+    case 'triaged':
+      return 'bg-indigo-100 text-indigo-800';
+    case 'pushed_to_linear':
+      return 'bg-violet-100 text-violet-800';
+    case 'duplicate':
+      return 'bg-zinc-200 text-zinc-700';
+    case 'failed':
+      return 'bg-amber-100 text-amber-900';
+    case 'closed':
+      return 'bg-emerald-100 text-emerald-800';
+  }
+}

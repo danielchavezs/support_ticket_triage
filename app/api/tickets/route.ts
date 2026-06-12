@@ -1,13 +1,25 @@
 import { createTicketFeature, listTicketsFeature } from '@/services/features/tickets';
 import { NextResponse } from 'next/server';
-import type { TicketRow } from '@/services/sources/supabase/domains/tickets';
+import { toTicketDto } from '@/app/api/tickets/_dto';
 
 export const runtime = 'nodejs';
 
-export async function GET() {
-  const result = await listTicketsFeature();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const orgId = url.searchParams.get('orgId');
+  if (!orgId || !UUID_PATTERN.test(orgId)) {
+    return NextResponse.json(
+      { error: { code: 'VALIDATION_ERROR', message: 'Query parameter `orgId` is required and must be a UUID.' } },
+      { status: 400 },
+    );
+  }
+
+  const result = await listTicketsFeature({ orgId });
   if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 500 });
+    const status = result.error.code === 'VALIDATION_ERROR' ? 400 : 500;
+    return NextResponse.json({ error: result.error }, { status });
   }
 
   return NextResponse.json({ tickets: result.data.map(toTicketDto) });
@@ -31,12 +43,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const parsedTicket = parseTicket(body);
-  if (!parsedTicket.success) {
-    return NextResponse.json({ error: parsedTicket.error }, { status: 400 });
+  const parsed = parseTicketBody(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
-  const result = await createTicketFeature({ ticket: parsedTicket.data });
+  const result = await createTicketFeature(parsed.data);
   if (!result.success) {
     const status = result.error.code === 'VALIDATION_ERROR' ? 400 : 500;
     return NextResponse.json({ error: result.error }, { status });
@@ -49,34 +61,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseTicket(value: Record<string, unknown>):
-  | { success: true; data: { customerName: string; email: string; subject: string; description: string } }
+/**
+ * Parse the v1 request body: `{ orgId, userId, subject, description }`.
+ * Cryptographic verification of the asserted `orgId`/`userId` arrives in
+ * Phase 7 (BL-012); v1 trusts the caller and only enforces shape.
+ */
+function parseTicketBody(value: Record<string, unknown>):
+  | { success: true; data: { orgId: string; userId: string; subject: string; description: string } }
   | { success: false; error: { code: string; message: string } } {
-  const customerName = typeof value.customerName === 'string' ? value.customerName : '';
-  const email = typeof value.email === 'string' ? value.email : '';
+  const orgId = typeof value.orgId === 'string' ? value.orgId : '';
+  const userId = typeof value.userId === 'string' ? value.userId : '';
   const subject = typeof value.subject === 'string' ? value.subject : '';
   const description = typeof value.description === 'string' ? value.description : '';
 
-  if (!customerName.trim()) return { success: false, error: { code: 'VALIDATION_ERROR', message: 'Customer name is required.' } };
-  if (!email.trim()) return { success: false, error: { code: 'VALIDATION_ERROR', message: 'Email is required.' } };
+  if (!UUID_PATTERN.test(orgId)) {
+    return { success: false, error: { code: 'VALIDATION_ERROR', message: '`orgId` is required and must be a UUID.' } };
+  }
+  if (!UUID_PATTERN.test(userId)) {
+    return { success: false, error: { code: 'VALIDATION_ERROR', message: '`userId` is required and must be a UUID.' } };
+  }
   if (!subject.trim()) return { success: false, error: { code: 'VALIDATION_ERROR', message: 'Subject is required.' } };
   if (!description.trim()) return { success: false, error: { code: 'VALIDATION_ERROR', message: 'Description is required.' } };
 
-  return { success: true, data: { customerName, email, subject, description } };
-}
-
-function toTicketDto(row: TicketRow) {
-  return {
-    id: row.id,
-    createdAt: row.created_at,
-    customerName: row.customer_name,
-    email: row.email,
-    subject: row.subject,
-    description: row.description,
-    priority: row.priority,
-    category: row.category,
-    suggestedResponse: row.suggested_response,
-    triageStatus: row.triage_status,
-    triageError: row.triage_error,
-  };
+  return { success: true, data: { orgId, userId, subject, description } };
 }

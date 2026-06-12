@@ -1,171 +1,105 @@
-## AGENTS Configuration for `support_ticket_triage`
+# AGENTS.md : airiam-ticket-triage
 
-This document defines the rules and architecture expectations for AI assistance and day-to-day development of the **Support Ticket Triage System**.
+Operational rules for coding agents working in this repository.
 
----
+## 1. Documentation Precedence
 
-### 1) Project Overview
+When sources disagree, this is the order:
 
-- **Project Name**: `support_ticket_triage`
-- **Goal**: Support ticket form → automatic LLM triage → persisted ticket dashboard.
-- **Key Constraints**: $0 cost (free-tier LLM), simple/working > ambitious, automated triage (no manual trigger).
-- **Persistence**: Supabase Postgres (MVP uses server-side API; Auth/RLS are future improvements).
+1. Actual code and runnable configuration in this repo.
+2. `docs/DC/airiam-ticket-triage-architecture.md` (the source-of-truth doc).
+3. Other docs under `docs/` (excluding `docs/requirements/legacy/`, which is historical reference only).
+4. This `AGENTS.md`.
+5. Other root markdown files.
 
----
+`docs/requirements/legacy/` is **reference-only**. The v1.0 and v1.1 design documents in there describe a larger Customer Intake Portal scope that this project deliberately does not implement. Do not treat them as binding.
 
-### 2) Agent Types and Roles
+## 2. Project Identity
 
+- **Project name:** `airiam-ticket-triage`.
+- **Owner:** Daniel Chávez, Airiam Advanced Tech Division (ATD).
+- **Goal:** internal triage system that receives ticket submissions from two source types (in-app submissions and, later, AIP monitoring), runs an LLM-assisted triage pipeline, deduplicates, pushes to Linear, and emails the submitter.
+- **Scope guard:** this is **not** the v1.1 Customer Intake Portal in `docs/requirements/legacy/`. Read `docs/DC/airiam-ticket-triage-architecture.md` for the actual scope before starting any non-trivial work.
 
-| Agent Name | Role / Responsibility                                     | Triggers / Invocation   |
-| ---------- | --------------------------------------------------------- | ----------------------- |
-| MainAgent  | Full-stack implementation, architecture, and docs support | Invoked on each request |
+## 3. Stack (Locked unless flagged)
 
+- Language: TypeScript only.
+- Runtime: Next.js 16 (App Router) + React 19, single deployable serving UI and API.
+- API: REST via Next.js Route Handlers under `app/api/*`.
+- UI: Tailwind CSS v4 + shadcn/ui. No CSS modules, no plain CSS for new work.
+- Forms: react-hook-form + Zod (planned; not yet wired).
+- Data client: TanStack Query (planned, only when a real client read surface exists).
+- Persistence: Supabase Postgres (dedicated project per environment) with RLS and `pgvector`.
+- LLM: Google Gemini via Vercel AI SDK (v1 default).
+- Linear: official Linear SDK (`@linear/sdk`).
+- Email: Provider interface scaffolded, concrete provider deferred.
+- Testing: Vitest.
+- Lint: ESLint with `eslint-config-next`.
+- Type checking: `tsc --noEmit`.
+- Package manager: pnpm.
+- Hosting target: Azure Container Apps (planned, **not fully locked**; DevOps decision may shift).
 
----
+## 4. Repository Structure
 
-### 3) Tools and Integrations
+### Current
 
-- **Next.js**: App Router + Route Handlers (`app/api/**`) for required endpoints.
-- **Vercel AI SDK**: LLM orchestration (structured output, optional streaming).
-- **Google Gemini**: Low-cost model (configurable; prefer a Flash Lite tier).
-- **Supabase**: PostgreSQL persistence (schema + migrations via SQL editor/CLI as needed).
-- **Zod** *(recommended)*: Runtime validation for request payloads and LLM output.
+- `app/` : Next.js App Router. Pages, layouts, API Route Handlers.
+- `app/api/` : REST route handlers.
+- `components/` : React UI components.
+- `services/features/` : business orchestration layer.
+- `services/providers/` : external integration adapters (Supabase, LLM, future Linear/email).
+- `migrations/` : SQL migrations applied via the Supabase CLI.
+- `tests/unit/` : Vitest unit tests.
+- `assets/databaseTypes.ts` : Supabase-generated TS types.
+- `types/` : Next.js generated route types plus custom types.
+- `docs/DC/airiam-ticket-triage-architecture.md` : source-of-truth doc.
+- `docs/DC/airiam-ticket-triage-roadmap.md` : delivery roadmap, phase order, blocker register, and progress checklist.
+- `docs/requirements/legacy/` : historical reference only.
 
----
+### Planned additions
 
-### 4) Configuration Parameters (Environment Variables)
+- `services/providers/linear/` : Linear SDK adapter.
+- `services/providers/email/` : email provider adapter.
+- `services/providers/monitoring/` : monitoring backend adapter (deferred).
+- `services/features/dedup/` : deduplication feature.
+- `services/features/triage/` : triage orchestration (the current triage logic moves and grows here).
+- `services/features/linear-sync/` : outbound push and inbound webhook handling.
+- `services/features/notifications/` : email orchestration.
+- `app/api/linear/webhook/` : inbound webhook handler.
+- `.github/workflows/` : CI/CD.
 
-Never commit secrets. Use `.env.local` for local development.
+## 5. Layer Pattern (MANDATORY for new code)
 
+Three layers. Dependency direction is strictly one-way.
 
-| Key                          | Required | Scope       | Description                                     |
-| ---------------------------- | -------- | ----------- | ----------------------------------------------- |
-| `GOOGLE_API_KEY`             | Yes      | Server      | Google AI Studio / Gemini API key               |
-| `SUPABASE_URL`               | Yes      | Server      | Supabase project URL                            |
-| `SUPABASE_SERVICE_ROLE_KEY`  | Yes      | Server-only | Supabase service role key (bypasses RLS)        |
-| `SUPABASE_CONNECTION_STRING` | Optional | Server-only | Postgres connection string (useful for scripts) |
-| `AI_MODEL`                   | Optional | Server      | Model id (default: a Gemini Flash Lite tier)    |
-
-
----
-
-### 5) Architecture & Boundaries
-
-The target architecture mirrors the reference repo’s approach (Application → Features → Sources) but adapted to the assessment’s required REST endpoints.
-
-**Application Layer (`app/`)**
-
-- Owns routing, rendering, and the API surface.
-- Implements the required endpoints in `app/api/tickets/route.ts`:
-  - `POST /api/tickets`
-  - `GET /api/tickets`
-
-**Feature Layer (`services/features/`)**
-
-- Owns business rules and orchestration:
-  - Validate incoming tickets
-  - Call the LLM triage pipeline
-  - Persist results
-  - Map errors to safe, user-friendly responses
-
-**Sources Layer (`services/sources/`)**
-
-- Pure integrations (no business rules):
-  - Supabase DB client + queries
-  - LLM provider client (Google via Vercel AI SDK)
-
-**Rules**
-
-- No direct DB/LLM calls from React components. Components call API routes.
-- Keep all secrets server-only. Never import server modules into client components.
-- Treat LLM output as untrusted input: parse + validate, fail safely.
-
----
-
-### 6) Rendering Strategy (SSR/CSR)
-
-Keep rendering simple and predictable:
-
-- **Dashboard**: SSR for first load is fine; update via CSR refetch after submitting a ticket.
-- **Form**: CSR for interactivity + loading states.
-- Avoid over-optimizing (ISR/edge) unless it clearly improves the MVP.
-
----
-
-### 7) Error Handling Expectations
-
-- If the LLM fails/times out/returns invalid JSON:
-  - The API returns a meaningful error (no secrets), and
-  - The UI shows a clear failure state and allows retry.
-- Prefer capturing “failed triage” explicitly (e.g., `triage_status = failed`) over silent drops.
-
----
-
-### 8) Security & Quality Bar (MVP)
-
-- Validate all API inputs server-side.
-- Add basic security headers (reasonable defaults) if low-effort.
-- Protect secrets: do not log full env vars, connection strings, or raw provider responses with sensitive content.
-- Keep the code readable and explainable; prioritize separation of concerns.
-
----
-
-### 9) References
-
-- Requirements: `docs/GENERAL_DEV_PLAN.md` (includes extracted requirements + design doc sections)
-
----
-
-### 10) Architecture Layers & Rules (Mandatory)
-
-The project follows a **3-layer architecture** for separation of concerns:
-
-```text
-Application Layer (UI/API) → Feature Layer (Business Logic) → Sources Layer (Data Operations)
+```
+APP (app/, components/) -> FEATURES (services/features/) -> PROVIDERS (services/providers/)
 ```
 
-#### Sources Layer Rules (`services/sources/`)
+### App layer rules (`app/`, `components/`)
 
-- ✅ **Pure data operations**: direct Supabase/external calls only
-- ✅ **Single responsibility**: each method does one specific operation
-- ✅ **Type safety**: all public methods must be fully typed
-- ❌ **NO business logic**: no validation, complex mapping, or orchestration
-- ❌ **NO cross-source dependencies**: sources cannot call other sources
-- ❌ **NO feature consumption**: sources cannot import from `services/features/**`
-- ❌ **NO opinionated error handling**: throw raw errors; Features interpret
+- Owns Next.js routing, rendering, form handling, API surface.
+- API Route Handlers under `app/api/*` are thin transport; they call Features and map results to HTTP.
+- MUST NOT import Providers directly.
+- MUST NOT contain business logic, validation rules, or external SDK calls.
 
-#### Feature Layer Rules (`services/features/`)
+### Feature layer rules (`services/features/`)
 
-- ✅ **Business orchestration**: can combine multiple Sources
-- ✅ **Error boundary**: catch and normalize errors into stable codes
-- ✅ **Validation & transformations**: request validation, mapping, business rules
-- ✅ **Observability**: add safe logging where it helps debugging
-- ❌ **NO direct external calls**: must go through Sources
-- ❌ **NO UI-specific logic**: keep framework-agnostic
+- Owns business orchestration: validate input, call Providers, normalize errors, persist results.
+- Catches Provider errors and maps them to `FeatureError` codes.
+- May call other Features when coupling is domain-local. If it would cycle, route through a higher-level orchestrator Feature instead.
+- MUST NOT import from `app/` or `components/`.
+- MUST NOT call external SDKs directly; always go through a Provider.
 
-#### Application Layer Rules (`app/`, `components/`)
+### Provider layer rules (`services/providers/`)
 
-- ✅ **Framework specifics**: Next.js routing, React UI, form handling
-- ✅ **API boundary**: UI calls `app/api/**` routes; API routes call Features
-- ❌ **NO business logic**: keep routes/components thin
-- ❌ **NO direct DB/LLM calls**: no Supabase/LLM access from UI components
+- One Provider per external dependency. Pure adapter: SDK call, error propagation, type marshalling.
+- Each Provider exposes a TypeScript interface (Protocol-style) the Feature layer depends on.
+- MUST NOT import Features or App code.
+- MUST NOT call other Providers. Cross-Provider composition happens in Features.
+- MUST NOT contain business logic, validation, or opinionated error handling. Throw raw provider/DB errors; Features interpret.
 
-#### Migration / refactor guideline (if needed)
-
-1) Start with Sources (CRUD + integration primitives)
-2) Build Features (orchestration + validation + error normalization)
-3) Update API/UI to consume Features
-4) Add targeted tests for critical paths
-5) Remove legacy code paths
-
----
-
-### 11) Error Handling Contract (Recommended Pattern)
-
-Error handling is intentionally layered and mostly non-throwing at the business boundary:
-
-- **Sources**: throw raw provider/db errors (no mapping).
-- **Features**: the main business boundary. Prefer returning a consistent result shape:
+### Error contract
 
 ```ts
 export type FeatureResult<T> =
@@ -179,43 +113,233 @@ export type FeatureError = {
 };
 ```
 
-- **Application/API routes**: map `FeatureError.code` → HTTP status + safe JSON response.
-- **UI**: render known errors as user-friendly messages; unexpected errors may throw to Next.js boundaries.
+Pattern: **Providers throw, Features normalize, API decides HTTP status and JSON shape.**
 
-Rule of thumb: **Sources throw → Features normalize → App decides whether to display or throw**.
+## 6. Import Policy
 
----
-
-### 12) Testing Setup (Planned)
-
-- Test runner: **Vitest**
-- Focus: targeted unit tests for Feature layer (validation, LLM parsing, error mapping)
-- Conventions:
-  - `tests/unit/**` for pure utilities/core logic
-  - Prefer mocking Sources when testing Features
-- Acceptance: if tests exist, they must pass via `pnpm test`
-
----
-
-### 13) Import Policy & Code Standards (Mandatory)
-
-- **Absolute imports only** using the `@/` prefix (configured in `tsconfig.json`).
-- **Relative imports are forbidden** (e.g., `../utils`, `./components`).
-- **Exception (limited)**: within a tightly-coupled folder (e.g., domain factories inside the same directory), relative imports are acceptable to avoid noisy index re-exports.
+- Absolute imports only, via the `@/` prefix configured in `tsconfig.json`.
+- Relative imports (`./`, `../`) are forbidden in application code.
+- Limited exception: within a tightly coupled folder (factory siblings inside one Provider, etc.), relative imports are acceptable to avoid noisy index re-exports.
 
 Example:
 
 ```ts
-// ✅ GOOD
+// GOOD
 import { createTicket } from "@/services/features/tickets";
 
-// ❌ BAD
+// BAD
 import { createTicket } from "../services/features/tickets";
 ```
 
+## 7. Agent Skills Strategy
+
+`AGENTS.md` is the primary source of project behavior. Skills are targeted accelerators; they reinforce these rules, they do not override them.
+
+### Vercel-style prompting protocol (required for non-trivial work)
+
+1. Explore relevant project files and current implementation state first.
+2. Select only the skill(s) that match the discovered task context.
+3. State in the prompt which skill is being used and why.
+4. Execute the task with the skill guidance while preserving project rules in this `AGENTS.md`.
+5. Verify outcomes and summarize what changed, what was tested, and what was deferred.
+
+Keep prompts concrete and scoped: objective, constraints, files, expected outputs, verification commands.
+
+### Skill routing protocol (default chains)
+
+| Task type | Default skill chain |
+|---|---|
+| Next.js / App Router / RSC boundaries | `$next-best-practices` -> `$react-best-practices` |
+| Building UI components (primitives, accessibility, design tokens) | `$building-components` -> `$shadcn` -> `$vercel-composition-patterns` |
+| Component API refactors | `$vercel-composition-patterns` -> `$react-best-practices` |
+| Form work (react-hook-form + Zod) | `$react-best-practices` |
+| REST API design | `$api-design-principles` -> `$error-handling-patterns` |
+| Postgres schema and indexing | `$postgresql` -> `$sql-optimization-patterns` |
+| LLM features via Vercel AI SDK | `$ai-sdk` |
+| Anthropic / Claude direct integration | `$claude-api` |
+| CI/CD workflows | `$github-actions-templates` |
+| Debugging | `$systematic-debugging` |
+| Pre-PR / pre-merge review | `$verification-before-completion` -> `$simplify` -> `$polish` |
+| UI design review | `$web-design-guidelines` |
+| Azure infrastructure preparation (when in scope) | `$azure-prepare` -> `$azure-validate` -> `$azure-deploy` |
+| Azure production troubleshooting | `$azure-diagnostics` + `$systematic-debugging` |
+| Cache strategy (Next.js cacheLife / cacheTag) | `$next-cache-components` |
+| Tailwind / design tokens | `$tailwind-design-system` |
+| Component design system audit | `$web-design-guidelines` -> `$building-components` |
+
+When multiple skills apply, state the execution order explicitly in the prompt before doing the work. If a task matches one of the routed cases above, treat the corresponding skill selection as the default, not optional guidance.
+
+If a routed skill is not installed or not available to the active agent, say so briefly and continue with the nearest available skill plus this repository's rules. Do not block implementation solely because a helper skill is missing.
+
+### Skills explicitly NOT used here
+
+- All Python skills (`$python-testing-patterns`, `$async-python-patterns`, etc.). This is a TS-only project.
+- `$entra-app-registration`. No Entra ID auth in v1.
+- `$react-state-management`. Use only if a real shared-state need emerges; not required by the current scope.
+- `$next-upgrade`. Greenfield Next.js 16, no upgrade path.
+
+### Multi-agent skill sync
+
+This repository uses **Claude Code** as the primary coding agent. If Codex or Antigravity are added later, follow the symlink pattern from the design-team-rag project:
+
+| Agent | Personal skills path | Project skills path |
+|---|---|---|
+| Claude Code | `~/.claude/skills/<skill>/SKILL.md` | `.claude/skills/` |
+| Codex | `~/.codex/skills/<skill>/SKILL.md` (symlink) | `.codex/skills/` |
+| Antigravity | `~/.gemini/antigravity/skills/<skill>/SKILL.md` (symlink) | `.agents/skills/` |
+
+This section is informational until a second agent is actually used in this repo.
+
+## 8. Linear Workspace Scope, Branching, and PR Workflow
+
+### Linear MCP and project scope (MANDATORY)
+
+This project uses Linear from the Airiam Advanced Tech Division workspace only. Agents must respect the scope below for every Linear read or write.
+
+- **Workspace:** `airiamspace`.
+- **Team:** `Airiamspace` (key `AIR`, id `c66f57f7-2728-4ea5-86e0-dc6f7907a869`).
+- **Project:** `ticket-triage` (id `e5230b15-9aac-4729-9992-68b1f26bedff`, URL `https://linear.app/airiamspace/project/ticket-triage-228763df997d`).
+- **MCP server:** the Airiam-scoped Linear MCP server (id starts with `3dda139b-...`) is the only permitted Linear integration for this project.
+
+Rules:
+
+- The `linear-personal` MCP server is **forbidden** for any work in this repository. Issue creates, edits, comments, and reads must all go through the Airiam-scoped server.
+- Every Linear operation must scope to the `AIR` team and the `ticket-triage` project. Creating issues outside that project is a process violation.
+- If a task appears to require touching another team, workspace, or project, stop and ask for explicit confirmation before proceeding.
+- When linking a Linear issue from a commit, PR, or doc, prefer the issue identifier (`AIR-NNN`) or the canonical issue URL on `linear.app/airiamspace`.
+
+### Branching
+
+- Branch from latest `dev`.
+- Feature branches: `feature/<short-description>`.
+- Open PRs against `dev`. Merge `dev -> main` only through reviewed PR / release flow.
+- No direct pushes to `dev` or `main`.
+- Every commit and PR references a Linear ticket where one exists.
+- Agents (Claude Code or any other) **never** approve a PR. Human approval is mandatory.
+
+### PR template (minimum content)
+
+- What changed and why.
+- Linear ticket reference, or explicit `N/A`.
+- Testing and verification performed (commands, screenshots, manual checks).
+- Reviewer notes for any non-obvious decisions or intentional gaps.
+
+## 9. Testing and Validation
+
+### Tooling
+
+- Test runner: Vitest.
+- Mocks: prefer mocking Providers when testing Features.
+- Test location: `tests/unit/**` for pure utilities and core logic; future `tests/integration/**` for full route handler flows.
+
+### Minimum local checks before opening a PR
+
+- `pnpm lint`
+- `pnpm typecheck` (or `tsc --noEmit` if no script alias yet)
+- `pnpm test`
+- `pnpm build`
+
+### Coverage policy
+
+- Minimum: **70%** lines, branches, functions, statements (enforced once CI is wired).
+- Target: **85%**.
+
+### Prioritize tests for
+
+- The triage Feature: classification result handling, fallback paths, retry.
+- The dedup Feature: deterministic-hash collisions and vector-similarity threshold behavior.
+- The Linear push Feature: success, transient failure, signature verification on inbound webhooks.
+- RLS-relevant DB access paths once the user-JWT route is wired.
+- Email confirmation and status-change trigger logic.
+- Any auth / authz path that touches `org_id` or `user_id` resolution.
+
+## 10. Environment Variables
+
+Never commit secrets. Use `.env.local` locally. Use Azure environment-scoped secrets in deployed environments.
+
+| Key | Required | Scope | Description |
+|---|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Browser + Server | Supabase project URL. URLs are not secrets; server reads this rather than a separate `SUPABASE_URL`. |
+| `SUPABASE_PUBLISHABLE_KEY` | Yes | Server | Supabase publishable key (new `sb_publishable_*` format or legacy `anon` JWT). RLS still applies. |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | When browser-side Supabase is used | Browser + Server | Same value as `SUPABASE_PUBLISHABLE_KEY`; the `NEXT_PUBLIC_` prefix tells Next.js to inline it for client components. |
+| `SUPABASE_SECRET_KEY` | Yes | Server-only | Supabase secret key (new `sb_secret_*` format or legacy `service_role` JWT). **BYPASSES RLS.** Never expose to the browser. |
+| `NEXT_PUBLIC_DEV_ORG_ID` | Yes (Phase 1 only) | Browser + Server | UUID of the seeded `ATD-internal` org from `migrations/dev/`. Dashboard client sends this as `orgId` on every API call until Phase 7 replaces it with real caller auth. |
+| `NEXT_PUBLIC_DEV_USER_ID` | Yes (Phase 1 only) | Browser + Server | UUID of the seeded dev user. Same lifecycle as `NEXT_PUBLIC_DEV_ORG_ID`. |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Yes | Server | Google Generative AI / Gemini API key. |
+| `AI_MODEL` | Optional | Server | Override for the default Gemini model (default: `gemini-2.5-flash-lite`). |
+| `LINEAR_API_KEY` | Yes (once Linear feature lands) | Server | Linear API key, scoped to the ATD workspace. |
+| `LINEAR_TEAM_ID` | Yes (once Linear feature lands) | Server | Target Linear team identifier. |
+| `LINEAR_WEBHOOK_SECRET` | Yes (once inbound webhook lands) | Server | Shared secret for Linear webhook signature verification. |
+| `EMAIL_PROVIDER_API_KEY` | TBD | Server | Provider key once chosen. |
+| `EMAIL_SENDER` | TBD | Server | Sending address. |
+| `IN_APP_CALLER_HMAC_SECRET` | TBD | Server | Shared secret for in-app caller HMAC, once that mechanism is locked. |
+
+Server-only vars never use the `NEXT_PUBLIC_` prefix. Browser-exposed vars must use `NEXT_PUBLIC_`.
+
+## 11. Security and Secrets
+
+- Never commit secrets, keys, tokens, passwords, or real credentials.
+- Treat LLM output as untrusted input: parse and validate with Zod.
+- Do not log full env vars, connection strings, or raw provider responses containing sensitive content.
+- Service-role Supabase access is constrained to specific Features. Not the blanket default.
+- RLS is enabled on every org-scoped table from migration day one. Service-role bypass is intentional and tracked.
+- Until user-JWT request paths exist, every service-role read/write must require trusted `org_id` / `user_id` context and apply explicit scoping in the Provider or repository method.
+- Production secrets are never accessible from dev contexts.
+
+## 12. Database Change Tracking
+
+- Every DB change (schema, functions, seeding) is a SQL file under `migrations/`.
+- File naming: `YYYY-MM-DD_<short_description>.sql`.
+- One migration per logical change. Do not amend prior migrations once applied to a deployed environment.
+- Do **not** run `git commit` unless explicitly requested by the user.
+
+## 13. Code Standards
+
+- TypeScript strict mode (already on; do not relax).
+- Tailwind for all styling. No plain CSS or CSS modules in new work.
+- No `OLD`, `backup`, or duplicate-variant files in normal implementation flow.
+- Prefer descriptive file names over generic ones (`triagePipeline.ts`, not `service.ts`) when a feature folder grows.
+- Public Features and Providers carry a one-paragraph file-level docstring explaining the boundary and any non-obvious constraints.
+
+## 14. Code Commenting Guidelines
+
+- Comments explain the **why** and the non-obvious **how**, not the **what**.
+- Avoid commenting small, self-explanatory helpers. Let names and types do the talking.
+- Public interfaces (exported types, Feature entry points, API route handlers) have meaningful docstrings.
+- Add inline comments for: complex state management, intricate data transformations, integration quirks, security checks, RLS interactions.
+
+## 15. Review and Change Discipline
+
+- When reviewing PRs, prioritize: bugs, logic errors, security issues, RLS / authz regressions, missing tests for new logic.
+- Infrastructure, deployment, and CI workflow changes deserve explicit human review even when technically correct.
+- Architecture decisions are surfaced in the source-of-truth doc, PR notes, or the decision register. They are never made silently.
+
+## 16. Definition of Done
+
+A change is done when:
+
+1. New behavior is wired through the App / Features / Providers layers correctly (no shortcuts).
+2. RLS policies are correct for any new org-scoped table.
+3. Migrations (if any) are created under `migrations/` and applied locally.
+4. Required env vars (if any) are added to `.env.local.example` (to be created) and to the env var table in this `AGENTS.md`.
+5. Tests cover the new logic at the Feature layer at minimum.
+6. Local verification ran clean: `pnpm lint`, `pnpm typecheck` (or `tsc --noEmit` until the alias exists), `pnpm test`, `pnpm build`.
+7. Any intentional gaps (stubs, TODOs, deferred integrations) are explicitly noted in the PR description.
+8. The source-of-truth doc is updated in the same change set if architecture-relevant behavior changed.
+
+## 17. Indexing for Agents
+
+When starting a non-trivial task, orient by reading, in this order:
+
+1. `docs/DC/airiam-ticket-triage-architecture.md` for scope and locked decisions.
+2. `docs/DC/airiam-ticket-triage-roadmap.md` for phase order, open blockers, and current progress.
+3. This `AGENTS.md` for rules.
+4. The relevant Feature or Provider module's file-level docstring.
+5. The relevant migration file(s) for schema context.
+6. `package.json` for available scripts and dependencies.
+
+Avoid orienting from files in `docs/requirements/legacy/`. They describe a different (larger) project and will mislead.
+
 ---
 
-### 14) Version Control & Database Change Tracking (Mandatory)
-
-- Do **not** run `git commit` unless explicitly requested by the user.
-- Every DB change (schema/functions/seeding) must be tracked as a SQL file under `migrations/` (create the folder if missing).
+*Last updated: 2026-05-12. Update in the same change set as architecture-relevant behavior changes.*

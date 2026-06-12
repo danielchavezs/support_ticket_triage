@@ -1,190 +1,309 @@
+/**
+ * Tickets Feature — business orchestration for ticket CRUD-ish operations.
+ *
+ * Phase 2 scope: create + list + get + state-aware retry. Triage itself
+ * lives in `services/features/triage/`; this Feature owns persistence and
+ * the `received` event, then hands off to `triageTicketFeature` inline
+ * after insert. If triage fails, the ticket still exists (recoverable
+ * `status='failed'` state) and is returned to the caller; the retry
+ * endpoint can resume it.
+ *
+ * Org-scoping invariant: every entry point requires `orgId` (and where
+ * applicable `userId`). The Feature relies on the Provider to apply the
+ * `org_id` predicate to every query; this Feature does NOT silently fall
+ * back to a default org.
+ *
+ * Event emission: every successful insert emits `ticket_events.received`
+ * via the `ticketEvents` Provider. Emission failures log but do not roll
+ * back the ticket — the ticket existing is more important than the audit
+ * event being recorded.
+ */
+
 import { fail, ok, type FeatureResult } from '@/services/features/types';
-import { server as sources } from '@/services/sources/supabase/server';
-import { classifyTicketWithLlm, draftCustomerReplyWithLlm } from '@/services/sources/llm/ticketTriage';
-import { isValidEmail } from '@/services/features/tickets/validation';
-import type {
-  NewTicketRow,
-  TicketCategory,
-  TicketPriority,
-  TicketRow,
-} from '@/services/sources/supabase/domains/tickets';
+import { server as sources } from '@/services/providers/supabase/server';
+import {
+  NewTicketInputSchema,
+  OrgScopedInputSchema,
+  TicketScopedInputSchema,
+  type NewTicketInput,
+} from '@/services/features/tickets/schemas';
+import { triageTicketFeature } from '@/services/features/triage/triageTicket';
+import { dedupTicketFeature } from '@/services/features/dedup/dedupTicket';
+import { pushTicketToLinearFeature } from '@/services/features/linear-sync/pushTicket';
+import type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
-export type NewTicketInput = {
-  customerName: string;
-  email: string;
-  subject: string;
-  description: string;
-};
+export type { NewTicketInput } from '@/services/features/tickets/schemas';
+export type { TicketRow } from '@/services/providers/supabase/domains/tickets';
 
-export type TriageOutput = {
-  priority: TicketPriority;
-  category: TicketCategory;
-  suggestedResponse: string;
-};
+export async function listTicketsFeature(input: { orgId: string }): Promise<FeatureResult<TicketRow[]>> {
+  const parsed = OrgScopedInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input.');
+  }
 
-export async function listTicketsFeature(): Promise<FeatureResult<TicketRow[]>> {
   try {
-    const tickets = await sources.tickets.list();
+    const tickets = await sources.tickets.list({ orgId: parsed.data.orgId });
     return ok(tickets);
-  } catch {
+  } catch (err) {
+    console.error('Tickets list failed:', err);
     return fail('TICKETS_LIST_FAILED', 'Failed to fetch tickets.');
   }
 }
 
-export async function createTicketFeature(input: {
-  ticket: NewTicketInput;
-}): Promise<FeatureResult<TicketRow>> {
-  const validation = validateNewTicketInput(input.ticket);
-  if (!validation.success) return validation;
+export async function createTicketFeature(input: NewTicketInput): Promise<FeatureResult<TicketRow>> {
+  const parsed = NewTicketInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input.');
+  }
 
-  const ticket = {
-    customer_name: input.ticket.customerName.trim(),
-    email: input.ticket.email.trim(),
-    subject: input.ticket.subject.trim(),
-    description: input.ticket.description.trim(),
-  };
-
-  const triage = await performTriage({
-    subject: ticket.subject,
-    description: ticket.description,
-  });
-
-  const toInsert: NewTicketRow = {
-    ...ticket,
-    priority: triage.priority,
-    category: triage.category,
-    suggested_response: triage.suggestedResponse.trim(),
-    triage_status: triage.status,
-    triage_error: triage.error,
-  };
-
+  let created: TicketRow;
   try {
-    const created = await sources.tickets.create(toInsert);
-    return ok(created);
-  } catch (dbErr) {
-    console.error('Ticket create failed:', dbErr);
+    created = await sources.tickets.create({
+      orgId: parsed.data.orgId,
+      userId: parsed.data.userId,
+      subject: parsed.data.subject,
+      description: parsed.data.description,
+      sourceKind: parsed.data.sourceKind,
+    });
+  } catch (err) {
+    console.error('Ticket create failed:', err);
     return fail('TICKET_CREATE_FAILED', 'Failed to create ticket.');
   }
+
+  // Emit `received` event. Best-effort: a failed emission does not roll back
+  // the ticket because the ticket existing is the more important invariant.
+  try {
+    await sources.ticketEvents.create({
+      orgId: created.org_id,
+      ticketId: created.id,
+      eventType: 'received',
+    });
+  } catch (err) {
+    console.error('ticket_events.received emission failed (non-fatal):', err);
+  }
+
+  // Inline dedup (step 2 of the architecture pipeline; Phase 3). A
+  // deterministic hit hard-links the ticket and short-circuits triage.
+  // Vector hits and no-hits fall through to triage. Dedup-feature errors
+  // are logged and the pipeline continues — same precedent as Phase 2's
+  // treatment of `received` event emission: ticket existence + classification
+  // is more important than dedup, which is recoverable via the retry path.
+  const dedup = await dedupTicketFeature({
+    orgId: created.org_id,
+    ticketId: created.id,
+    subject: parsed.data.subject,
+    description: parsed.data.description,
+  });
+
+  if (dedup.success && dedup.data.kind === 'deterministic_hit') {
+    // Row has been updated to `status='duplicate'` with `duplicate_of` set.
+    // Re-read to return the post-dedup state to the caller. Fall back to the
+    // created row if the refetch fails (best-effort, matches the post-triage
+    // fallback below).
+    try {
+      const current = await sources.tickets.getById({ orgId: created.org_id, ticketId: created.id });
+      if (current) return ok(current);
+    } catch (err) {
+      console.error('ticket fetch after dedup hit failed (non-fatal):', err);
+    }
+    return ok(created);
+  }
+
+  if (!dedup.success) {
+    console.error(
+      `Dedup failed (continuing to triage): ${dedup.error.code} ${dedup.error.message}`,
+    );
+  }
+
+  // Inline triage (steps 3–5 of the architecture pipeline). A failure here
+  // leaves the ticket with `status='failed'` and `triage_error` set — the
+  // ticket itself is still created successfully, so the API returns 201.
+  // The retry endpoint can resume the failed ticket later.
+  const triage = await triageTicketFeature({ orgId: created.org_id, ticketId: created.id });
+
+  // Inline Linear push (step 6, Phase 4). Runs only when triage succeeded
+  // and produced a `triaged` row. Linear errors do NOT roll back triage —
+  // the row stays `triaged` with `linear_issue_id IS NULL` and the retry
+  // dispatcher resumes from that gap. We return whichever row state is
+  // most up-to-date.
+  if (triage.success && triage.data.status === 'triaged') {
+    const push = await pushTicketToLinearFeature({
+      orgId: triage.data.org_id,
+      ticketId: triage.data.id,
+    });
+    if (push.success) return ok(push.data.ticket);
+    console.error(
+      `Linear push failed (recoverable via retry): ${push.error.code} ${push.error.message}`,
+    );
+    return ok(triage.data);
+  }
+
+  if (triage.success) return ok(triage.data);
+
+  try {
+    const current = await sources.tickets.getById({ orgId: created.org_id, ticketId: created.id });
+    if (current) return ok(current);
+  } catch (err) {
+    console.error('ticket fetch after triage failure failed (non-fatal):', err);
+  }
+
+  return ok(created);
 }
 
-function validateNewTicketInput(input: NewTicketInput): FeatureResult<never> | { success: true } {
-  const customerName = input.customerName?.trim();
-  const email = input.email?.trim();
-  const subject = input.subject?.trim();
-  const description = input.description?.trim();
-
-  if (!customerName) return fail('VALIDATION_ERROR', 'Customer name is required.');
-  if (!email) return fail('VALIDATION_ERROR', 'Email is required.');
-  if (!subject) return fail('VALIDATION_ERROR', 'Subject is required.');
-  if (!description) return fail('VALIDATION_ERROR', 'Description is required.');
-
-  if (!isValidEmail(email)) return fail('VALIDATION_ERROR', 'Email must be a valid email address.');
-
-  return { success: true };
-}
-
-export async function retryTicketTriageFeature(input: {
+export async function getTicketFeature(input: {
+  orgId: string;
   ticketId: string;
 }): Promise<FeatureResult<TicketRow>> {
-  let existingTicket: TicketRow | null;
+  const parsed = TicketScopedInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input.');
+  }
+
+  let ticket: TicketRow | null;
   try {
-    existingTicket = await sources.tickets.getById(input.ticketId);
+    ticket = await sources.tickets.getById({ orgId: parsed.data.orgId, ticketId: parsed.data.ticketId });
   } catch (err) {
-    console.error('Failed to fetch ticket for retry:', err);
+    console.error('Ticket fetch failed:', err);
     return fail('TICKET_FETCH_FAILED', 'Failed to fetch ticket.');
   }
 
-  if (!existingTicket) {
-    return fail('TICKET_NOT_FOUND', 'Ticket not found.');
-  }
-
-  const triage = await performTriage({
-    subject: existingTicket.subject,
-    description: existingTicket.description,
-    defaults: {
-      priority: existingTicket.priority as TicketPriority,
-      category: existingTicket.category as TicketCategory,
-      suggestedResponse: existingTicket.suggested_response ?? undefined,
-    },
-  });
-
-  try {
-    const updated = await sources.tickets.updateTriage(input.ticketId, {
-      priority: triage.priority,
-      category: triage.category,
-      suggested_response: triage.suggestedResponse.trim(),
-      triage_status: triage.status,
-      triage_error: triage.error,
-    });
-    return ok(updated);
-  } catch (dbErr) {
-    console.error('Ticket triage update failed:', dbErr);
-    return fail('TICKET_UPDATE_FAILED', 'Failed to update ticket triage.');
-  }
+  if (!ticket) return fail('TICKET_NOT_FOUND', 'Ticket not found.');
+  return ok(ticket);
 }
 
 /**
- * Shared helper to perform LLM triage (classification + drafting).
+ * State-aware retry dispatcher.
+ *
+ * Dispatch order (top branch wins):
+ *   1. `status='duplicate'`               → if the canonical ticket is gone,
+ *                                            clear `duplicate_of` + reset
+ *                                            `status='received'`, then re-run
+ *                                            dedup. If the canonical is still
+ *                                            present, no-op (idempotent).
+ *   2. `dedup_signature IS NULL`          → re-run dedup. Covers the case
+ *      AND `status='received'`             where create-time dedup hit a
+ *                                            transient error and was logged-
+ *                                            and-skipped.
+ *   3. `type IS NULL` OR `status='failed'` → re-run triage. Phase 2 semantics
+ *                                            preserved. On success, fall
+ *                                            through to the Linear-push
+ *                                            branch below so the freshly
+ *                                            triaged ticket also lands in
+ *                                            Linear in the same call.
+ *   4. `status='triaged'`                  → re-run Linear push. Phase 4:
+ *      AND `linear_issue_id IS NULL`        covers the case where Linear was
+ *                                            briefly unavailable at create
+ *                                            time and the push was skipped.
+ *   5. Anything else                       → idempotent no-op.
+ *
+ * Why the order matters: a stale-duplicate state must be cleared before any
+ * dedup/triage re-run runs, otherwise the dispatcher would see `status='duplicate'`
+ * and treat it as a no-op forever. Linear push runs last because it depends
+ * on the triage result.
  */
-async function performTriage(input: {
-  subject: string;
-  description: string;
-  defaults?: {
-    priority: TicketPriority;
-    category: TicketCategory;
-    suggestedResponse?: string;
-  };
-}): Promise<TriageOutput & { status: 'succeeded' | 'failed'; error: string | null }> {
-  let classificationFailed = false;
-  let responseFailed = false;
-  let priority: TicketPriority = input.defaults?.priority ?? 'Low';
-  let category: TicketCategory = input.defaults?.category ?? 'General';
-  let suggestedResponse = '';
+export async function retryTicketTriageFeature(input: {
+  orgId: string;
+  ticketId: string;
+}): Promise<FeatureResult<TicketRow>> {
+  const fetched = await getTicketFeature(input);
+  if (!fetched.success) return fetched;
 
-  // 1. Classification
-  try {
-    const classification = await classifyTicketWithLlm({
-      subject: input.subject,
-      description: input.description,
-    });
-    priority = classification.priority;
-    category = classification.category;
-  } catch (err) {
-    console.error('LLM classification failed:', err);
-    classificationFailed = true;
+  let ticket = fetched.data;
+
+  // Branch 1: stale-duplicate recovery.
+  if (ticket.status === 'duplicate' && ticket.duplicate_of) {
+    let canonical: TicketRow | null = null;
+    try {
+      canonical = await sources.tickets.getById({
+        orgId: ticket.org_id,
+        ticketId: ticket.duplicate_of,
+      });
+    } catch (err) {
+      console.error('Retry: canonical fetch failed (treating as missing):', err);
+    }
+
+    if (canonical) {
+      // Canonical still here — duplicate state is correct, nothing to retry.
+      return ok(ticket);
+    }
+
+    // Canonical missing: clear the duplicate linkage so the next branches
+    // can run on a clean `status='received'` row.
+    try {
+      ticket = await sources.tickets.updateDedupState({
+        orgId: ticket.org_id,
+        ticketId: ticket.id,
+        update: { duplicateOf: null, status: 'received' },
+      });
+    } catch (err) {
+      return fail(
+        'DEDUP_PERSIST_FAILED',
+        err instanceof Error ? err.message : 'Failed to clear stale duplicate state.',
+      );
+    }
   }
 
-  // 2. Response Drafting
-  try {
-    const drafted = await draftCustomerReplyWithLlm({
-      priority,
-      category,
-      subject: input.subject,
+  // Branch 2: re-dedup when signature is missing on a received row.
+  if (ticket.status === 'received' && ticket.dedup_signature == null) {
+    const dedup = await dedupTicketFeature({
+      orgId: ticket.org_id,
+      ticketId: ticket.id,
+      subject: ticket.subject,
+      description: ticket.description,
     });
-    suggestedResponse = drafted.customerMessage;
-  } catch (err) {
-    console.error('LLM customer reply drafting failed:', err);
-    responseFailed = true;
-    suggestedResponse =
-      input.defaults?.suggestedResponse ??
-      "Thanks for reaching out. We've received your request and our team will review it. If you can share any additional details, we'll be able to help faster.";
+
+    if (dedup.success && dedup.data.kind === 'deterministic_hit') {
+      // Row now `status='duplicate'`; re-read to return that state.
+      const refetched = await sources.tickets.getById({
+        orgId: ticket.org_id,
+        ticketId: ticket.id,
+      });
+      return ok(refetched ?? ticket);
+    }
+
+    if (!dedup.success) {
+      console.error(
+        `Retry: dedup re-run failed (continuing to triage): ${dedup.error.code} ${dedup.error.message}`,
+      );
+    } else {
+      // Vector hit or no_hit: refetch to pick up any signature/embedding the
+      // dedup orchestrator persisted before the triage branch evaluates.
+      try {
+        const refetched = await sources.tickets.getById({
+          orgId: ticket.org_id,
+          ticketId: ticket.id,
+        });
+        if (refetched) ticket = refetched;
+      } catch (err) {
+        console.error('Retry: refetch after dedup failed (non-fatal):', err);
+      }
+    }
   }
 
-  const triageFailed = classificationFailed || responseFailed;
-  const triageError =
-    classificationFailed && responseFailed
-      ? 'LLM_CLASSIFICATION_AND_RESPONSE_FAILED'
-      : classificationFailed
-        ? 'LLM_CLASSIFICATION_FAILED'
-        : responseFailed
-          ? 'LLM_RESPONSE_FAILED'
-          : null;
+  // Branch 3: triage retry (Phase 2 semantics). On success, fall through to
+  // branch 4 so the Linear push happens in the same retry call when the
+  // ticket newly reaches `triaged` state.
+  if (ticket.type == null || ticket.status === 'failed') {
+    const triage = await triageTicketFeature({ orgId: ticket.org_id, ticketId: ticket.id });
+    if (!triage.success) return triage;
+    ticket = triage.data;
+  }
 
-  return {
-    priority,
-    category,
-    suggestedResponse,
-    status: triageFailed ? 'failed' : 'succeeded',
-    error: triageError,
-  };
+  // Branch 4: Linear-push retry (Phase 4). Covers the case where the
+  // outbound push hit a transient failure at create time.
+  if (ticket.status === 'triaged' && ticket.linear_issue_id == null) {
+    const push = await pushTicketToLinearFeature({
+      orgId: ticket.org_id,
+      ticketId: ticket.id,
+    });
+    if (!push.success) {
+      // Stay recoverable: surface the ticket's current row state to the
+      // caller, but report the push failure code so operators can act.
+      return push;
+    }
+    return ok(push.data.ticket);
+  }
+
+  // Branch 5: idempotent no-op.
+  return ok(ticket);
 }

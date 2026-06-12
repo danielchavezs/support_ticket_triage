@@ -7,7 +7,7 @@ export default function Home() {
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-10 sm:px-6">
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold tracking-tight">New support ticket</h1>
-          <p className="text-zinc-600">Submit a ticket to run automatic triage and generate a suggested response.</p>
+          <p className="text-zinc-600">Submit a ticket for triage review.</p>
           <div className="mt-1 text-sm">
             <Link href="/dashboard" className="font-medium text-zinc-900 underline underline-offset-4">
               View dashboard

@@ -1,39 +1,39 @@
-# Support Ticket Triage System
+# airiam-ticket-triage
 
-Full-stack Next.js app where a customer submits a support ticket, the backend automatically runs **LLM triage** (priority + category) and generates a suggested response, and a dashboard lists all submitted tickets.
+Internal ticket triage system owned by the Airiam Advanced Tech Division (ATD). Receives ticket submissions, runs an LLM-assisted triage pipeline, deduplicates, pushes to Linear, and emails the submitter.
 
-## Features
+This README is a getting-started guide. For scope, architecture, and locked decisions see the source-of-truth docs below.
 
-- Ticket submission form (required): **customer name**, **email**, **subject**, **description**
-- Automated AI triage on submit:
-  - Priority: `Critical` | `High` | `Medium` | `Low`
-  - Category: `Billing` | `Technical` | `Account` | `General`
-  - Suggested customer-facing response
-- Ticket dashboard with list + details view
-- Persistence via **Supabase Postgres**
-- Backend API:
-  - `POST /api/tickets`
-  - `GET /api/tickets`
+## Source of truth
+
+When this README disagrees with the docs below, the docs win.
+
+1. [`docs/DC/airiam-ticket-triage-architecture.md`](docs/DC/airiam-ticket-triage-architecture.md) — scope, layers, schema, locked decisions.
+2. [`docs/DC/airiam-ticket-triage-roadmap.md`](docs/DC/airiam-ticket-triage-roadmap.md) — delivery phases, decision blockers, progress checklist.
+3. [`AGENTS.md`](AGENTS.md) — rules for coding agents and humans working in this repo.
 
 ## Stack
 
-- Next.js (App Router) + React + TypeScript
-- Tailwind CSS
-- Vercel AI SDK + Google Gemini (free tier)
-- Supabase (PostgreSQL) for persistence
+- TypeScript, Next.js 16 (App Router) + React 19, single deployable serving UI and REST API.
+- Tailwind CSS v4 + shadcn/ui (planned).
+- Vercel AI SDK + Google Gemini (v1 default).
+- Supabase Postgres (dedicated project per environment) with RLS and `pgvector`.
+- Linear SDK (`@linear/sdk`) — once Phase 4 lands.
+- Vitest for tests, ESLint via `eslint-config-next`, pnpm for package management.
 
-## Architecture (3-layer)
+## Architecture (3 layers, one-way dependencies)
 
-- **Application layer**: `app/` routes + `app/api/**` route handlers
-- **Feature layer**: `services/features/**` business logic (triage pipeline)
-- **Sources layer**: `services/sources/**` integrations (Supabase, LLM provider)
+- **App** (`app/`, `components/`) — Next.js routes, layouts, components, API route handlers under `app/api/*`.
+- **Features** (`services/features/**`) — business orchestration. Calls Providers, normalizes errors.
+- **Providers** (`services/providers/**`) — one adapter per external dependency (Supabase, LLM, Linear, email).
 
-See `AGENTS.md` for rules and conventions.
+See the architecture doc for the full layer contract.
 
 ## Routes
 
 - Submit ticket: `/`
 - Dashboard: `/dashboard`
+- API base: `/api/`
 
 ## Local setup
 
@@ -45,43 +45,19 @@ pnpm install
 
 ### 2) Environment variables
 
-Create `.env.local` (recommended) or `.env` with:
+Copy the template and fill in your values:
 
 ```bash
-# LLM
-# Recommended
-GOOGLE_GENERATIVE_AI_API_KEY=...
-# Or (legacy naming used by some setups)
-GOOGLE_API_KEY=...
-
-# Optional (defaults to gemini-2.5-flash-lite)
-AI_MODEL=gemini-2.5-flash-lite
-
-# Supabase (server / API routes)
-SUPABASE_URL=...
-# Either one is enough (both are the *anon* key):
-SUPABASE_ANON_KEY=...
-# or
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-
-# Supabase (browser) — only needed if/when client components call Supabase directly
-NEXT_PUBLIC_SUPABASE_URL=...
-
-# Optional (server-only; reserved for admin workflows / future RLS setup)
-SUPABASE_SERVICE_ROLE_KEY=...
+cp .env.local.example .env.local
 ```
 
-Notes:
-
-- `SUPABASE_SERVICE_ROLE_KEY` is **server-only**. Never expose it to the browser.
-- In Next.js, env vars prefixed with `NEXT_PUBLIC_` are safe to expose to the browser. Server-only env vars should not use that prefix.
+`.env.local` is gitignored. Never commit secrets. The template lists every key the project uses today plus the ones that activate as future phases (Linear, email, caller HMAC) land. Authoritative env reference: `AGENTS.md` §10.
 
 ### 3) Supabase schema
 
-Apply the initial schema in your Supabase project:
+No schema exists yet. Phase 1 lands the v1 tables (`orgs`, `users`, `tickets`, `ticket_events`, `dedup_signatures`) plus RLS policies via SQL migrations under `migrations/`, applied to a fresh Supabase project per the architecture doc.
 
-- Open Supabase → SQL editor
-- Run `migrations/2026-02-05_create_tickets.sql`
+Until Phase 1 lands, the app cannot persist tickets end-to-end against a real Supabase project. The current code still references Provider methods that expect a schema that has not been created.
 
 ### 4) Run the app
 
@@ -89,17 +65,25 @@ Apply the initial schema in your Supabase project:
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open <http://localhost:3000>.
 
 ## Scripts
 
-- Dev server: `pnpm dev`
-- Lint: `pnpm lint`
-- Tests: `pnpm test`
-- Build: `pnpm build`
-- Start: `pnpm start`
+- `pnpm dev` — dev server
+- `pnpm build` — production build
+- `pnpm start` — start the built app
+- `pnpm lint` — ESLint
+- `pnpm typecheck` — `tsc --noEmit`
+- `pnpm test` — Vitest, single run
+- `pnpm test:watch` — Vitest in watch mode
+- `pnpm gen-types` — regenerate Supabase TypeScript types into `assets/databaseTypes.ts`
 
-## Scope notes
+## Pre-PR verification
 
-- MVP keeps the dashboard public; Auth/RLS are documented as future improvements.
-- Streaming AI output is optional; ship a non-streaming path first, then add streaming.
+Before opening a PR, run all four locally:
+
+```bash
+pnpm lint && pnpm typecheck && pnpm test && pnpm build
+```
+
+CI will enforce the same gates once Phase 8 lands (see roadmap).

@@ -21,8 +21,6 @@ export default function TicketSubmitClient() {
   async function onSubmit(form: HTMLFormElement) {
     const data = new FormData(form);
     const payload: NewTicketPayload = {
-      customerName: String(data.get('customerName') ?? ''),
-      email: String(data.get('email') ?? ''),
       subject: String(data.get('subject') ?? ''),
       description: String(data.get('description') ?? ''),
     };
@@ -45,7 +43,7 @@ export default function TicketSubmitClient() {
   return (
     <section className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
       <h2 className="text-lg font-semibold">Ticket submission</h2>
-      <p className="mt-1 text-sm text-zinc-600">All fields are required. Triage runs automatically on submit.</p>
+      <p className="mt-1 text-sm text-zinc-600">Describe the issue so it can be reviewed by the triage workflow.</p>
 
       <form
         className="mt-4 flex flex-col gap-3"
@@ -56,23 +54,6 @@ export default function TicketSubmitClient() {
       >
         <SuccessBanner ticket={successTicket} />
 
-        <Field label="Customer name">
-          <input
-            name="customerName"
-            required
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none ring-0 focus:border-zinc-400"
-            placeholder="Jane Doe"
-          />
-        </Field>
-        <Field label="Email">
-          <input
-            name="email"
-            type="email"
-            required
-            className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm outline-none ring-0 focus:border-zinc-400"
-            placeholder="jane@example.com"
-          />
-        </Field>
         <Field label="Subject">
           <input
             name="subject"
@@ -99,7 +80,7 @@ export default function TicketSubmitClient() {
           {submitting ? (
             <div className="flex items-center gap-2.5 animate-in fade-in zoom-in-95 duration-200">
               <Loader size="sm" />
-              <span>Submitting… (running triage)</span>
+              <span>Submitting ticket…</span>
             </div>
           ) : (
             <span className="animate-in fade-in slide-in-from-bottom-2 duration-300">Submit ticket</span>
