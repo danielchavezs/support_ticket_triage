@@ -219,3 +219,19 @@ import { createTicket } from "../services/features/tickets";
 
 - Do **not** run `git commit` unless explicitly requested by the user.
 - Every DB change (schema/functions/seeding) must be tracked as a SQL file under `migrations/` (create the folder if missing).
+
+---
+
+### 15) Multi-Agent / "Ultra" Mode Discipline
+
+Applies to any high-concurrency multi-agent orchestration mode — Claude Code's "Ultra" mode, Codex's equivalent, or any other setup where one agent spawns and manages sub-agents.
+
+- **Size the fan-out to the task, not to the mode.** Concurrent/parallel sub-agents are fine when they genuinely help, but the orchestrator must weigh effectiveness against efficiency (cost, time, usage burn) before spawning them. Do not default to spawning tens or hundreds of sub-agents when a handful — or one — would do the job.
+- **The orchestrator owns sub-agent liveness.** It is solely responsible for noticing and recovering from a stalled, hung, or silently-failed sub-agent — not the human.
+- **The orchestrator owns sub-agent output quality.** Delegating a task does not discharge responsibility for the result. Review what a sub-agent returns for correctness and completeness before relying on it or passing it along.
+- **The orchestrator owns context and skill handoff.** Give each sub-agent the relevant scope, constraints, and prior findings, plus the right skills/tools where applicable, rather than sending it in cold.
+- **Never blindly accept sub-agent output.** Validate results — re-read, spot-check, or adversarially verify as the risk warrants — before merging, reporting, or acting on them.
+
+**Preferred (not mandatory) — cheaper-model teams for reads.** For large-surface read-only work (broad exploration, multi-file audits, log/data sweeps), prefer a stronger model orchestrating a team of sub-agents on a smaller/cheaper model — e.g. for Claude: Fable 5.1 or Opus 5 orchestrating Sonnet 5 sub-agents; for Codex: GPT-5.6 Terra/Sol or GPT-6 Astra orchestrating GPT-5.6 Luna sub-agents. No separate approval is needed for this — it is the default for read-only fan-out.
+
+**The same pattern for build/write work is preferred but needs a check-in first.** The same "cheap model does the bulk work, strong model validates before accepting and reporting to the human" pattern can extend to writing code, but — unlike reads — ask which approach the human prefers before using it on write operations, rather than applying it by default.
